@@ -856,10 +856,11 @@ jobs:
           # DoorNet2 build that used luci-theme-design.
           rm -f /etc/config/design
 
-          if [ "$(uci -q get system.@system[0].hostname)" = "OpenWrt" ]; then
-              uci -q set system.@system[0].hostname='DoorNet2'
-              uci -q commit system
-          fi
+          # System hostname is intentionally standardized to OpenWrt.
+          # This applies to both clean installs and retained sysupgrades, so
+          # the shell prompt / LuCI hostname / local hostname all stay aligned.
+          uci -q set system.@system[0].hostname='OpenWrt'
+          uci -q commit system
 
           rm -rf \
             /tmp/luci-indexcache \
@@ -897,6 +898,47 @@ jobs:
           echo "29056b0619beeabd7198f9803d61edb02cf4b186dcc670631ee6527846ffc20e  /tmp/doornet2-slim-ui/argon181.tar.gz" | sha256sum -c -
 
           tar -xzf /tmp/doornet2-slim-ui/argon181.tar.gz -C files
+
+          # OpenWrt branding:
+          # the system hostname is also standardized to OpenWrt by 95-doornet2-ui;
+          # DoorNet2 internal updater/service/release identifiers remain unchanged.
+          ARGON_HEADER="files/usr/lib/lua/luci/view/themes/argon/header.htm"
+          test -f "$ARGON_HEADER"
+
+          python3 - "$ARGON_HEADER" <<'PY_ARGON_BRAND'
+          from pathlib import Path
+          import re
+          import sys
+
+          p = Path(sys.argv[1])
+          s = p.read_text()
+
+          # Argon 1.8.x renders the top-left label inside <a class="brand">.
+          # Replace the visible brand with OpenWrt. DoorNet2 updater/service
+          # names and internal release identifiers remain unchanged.
+          brand = re.compile(
+              r'(<a\b[^>]*\bclass=(["\'])brand\2[^>]*>).*?(</a>)',
+              re.S,
+          )
+          s2, n = brand.subn(
+              lambda m: m.group(1) + "OpenWrt" + m.group(3),
+              s,
+              count=1,
+          )
+
+          if n != 1:
+              raise SystemExit("ERROR: Argon brand anchor not found exactly once")
+
+          # Verify the modified anchor really contains OpenWrt.
+          m = brand.search(s2)
+          if not m or "OpenWrt" not in m.group(0):
+              raise SystemExit("ERROR: Argon OpenWrt brand verification failed")
+
+          p.write_text(s2)
+          print("Argon top-left brand patched to OpenWrt")
+          PY_ARGON_BRAND
+
+          grep -q 'OpenWrt</a>' "$ARGON_HEADER"
 
           test -f files/www/luci-static/argon/css/cascade.css
           test -f files/www/luci-static/argon/css/dark.css
@@ -1710,10 +1752,20 @@ jobs:
               uci -q delete passwall.DN_ProxyGame.ip_list
           fi
 
+          # Visible-label migration only. Keep the internal UCI section name
+          # R4Shunt unchanged so retained upgrades preserve every user-selected
+          # service node. V5.3.3 used "R4 分流总节点"; the new visible label is
+          # simply "分流总节点".
+          R4_REMARK="$(uci -q get passwall.R4Shunt.remarks)"
+          if [ "$R4_REMARK" = "R4 分流总节点" ]; then
+              uci -q set passwall.R4Shunt.remarks='分流总节点'
+              R4_REMARK='分流总节点'
+          fi
+
           # Do not overwrite a previously customized R4 preset. Attach the
           # system direct rule and, when possible, inherit DN_OpenAI's concrete
           # node for the ChatGPT login path. Leave all other dropdowns untouched.
-          if [ "$(uci -q get passwall.R4Shunt.remarks)" = "R4 分流总节点" ]; then
+          if [ "$R4_REMARK" = "分流总节点" ]; then
               uci -q set passwall.R4Shunt.DN_ForcedDirect='_direct'
               uci -q set passwall.R4Shunt.DN_TencentDirect='_direct'
               uci -q set passwall.R4Shunt.DN_WeChat='_direct'
@@ -1874,7 +1926,7 @@ jobs:
           # DN_ForcedDirect rule is active by default.
           uci -q delete passwall.R4Shunt
           uci -q set passwall.R4Shunt='nodes'
-          uci -q set passwall.R4Shunt.remarks='R4 分流总节点'
+          uci -q set passwall.R4Shunt.remarks='分流总节点'
           uci -q set passwall.R4Shunt.type='Xray'
           uci -q set passwall.R4Shunt.protocol='_shunt'
           uci -q set passwall.R4Shunt.domainStrategy='IPOnDemand'
@@ -2610,12 +2662,19 @@ jobs:
           grep -q "delete luci.themes.Design" \
             files/etc/uci-defaults/95-doornet2-ui
 
+          grep -q "system.@system\[0\].hostname='OpenWrt'" \
+            files/etc/uci-defaults/95-doornet2-ui
+          ! grep -q "system.@system\[0\].hostname='DoorNet2'" \
+            files/etc/uci-defaults/95-doornet2-ui
+
           test -f package/feeds/luci/luci-theme-argon/Makefile || \
             test -f feeds/luci/themes/luci-theme-argon/Makefile
           test ! -e package/lean/luci-theme-design
           test ! -e files/etc/config/design
 
+          test -f files/usr/lib/lua/luci/view/themes/argon/header.htm
           test -f files/usr/lib/lua/luci/view/themes/argon/footer.htm
+          grep -q 'OpenWrt</a>' files/usr/lib/lua/luci/view/themes/argon/header.htm
           grep -q 'ArgonTheme v1.8.1' files/usr/lib/lua/luci/view/themes/argon/footer.htm
           echo "29056b0619beeabd7198f9803d61edb02cf4b186dcc670631ee6527846ffc20e  extracted Slim Argon 1.8.1 payload"
 
@@ -6182,7 +6241,7 @@ jobs:
           test -x files/usr/bin/doornet2-health
           sh -n files/usr/bin/doornet2-health
 
-          grep -q "R4 分流总节点" \
+          grep -q "R4Shunt.remarks='分流总节点'" \
             files/etc/uci-defaults/96-doornet2-passwall-shunt
 
           PASSWALL_DEFAULT_CFG="feeds/passwall_luci/luci-app-passwall/root/usr/share/passwall/0_default_config"
@@ -6217,6 +6276,8 @@ jobs:
 
           test -x files/etc/uci-defaults/95-doornet2-ui
           grep -q "mediaurlbase='/luci-static/argon'" \
+            files/etc/uci-defaults/95-doornet2-ui
+          grep -q "system.@system\[0\].hostname='OpenWrt'" \
             files/etc/uci-defaults/95-doornet2-ui
           test ! -e files/etc/config/design
 
@@ -6603,9 +6664,14 @@ jobs:
           test -f "$UI99"
           grep -q "mediaurlbase='/luci-static/argon'" "$UI95"
           grep -q "mediaurlbase='/luci-static/argon'" "$UI99"
+          grep -q "system.@system\[0\].hostname='OpenWrt'" "$UI95"
 
           test -d "$ROOTFS_DIR/www/luci-static/bootstrap"
           test -d "$ROOTFS_DIR/www/luci-static/argon"
+
+          ARGON_HEADER="$ROOTFS_DIR/usr/lib/lua/luci/view/themes/argon/header.htm"
+          test -f "$ARGON_HEADER"
+          grep -q 'OpenWrt</a>' "$ARGON_HEADER"
 
           if [ -e "$ROOTFS_DIR/www/luci-static/design" ] || \
              [ -e "$ROOTFS_DIR/etc/config/design" ]; then
@@ -6778,6 +6844,8 @@ jobs:
           - Lua-compatible Argon from the matching LuCI feed is the default shell; Bootstrap is retained as fallback
           - Normal LuCI Status / Overview is the homepage
           - QuickStart remains installed only as an optional application page
+          - System hostname and Argon top-left brand are both standardized to "OpenWrt"; DoorNet2 updater/service/release identifiers remain internal project names
+          - PassWall visible R4Shunt label is "分流总节点"; retained V5.3.3 "R4 分流总节点" is migrated in place without changing the internal R4Shunt section
           - Legacy Design is not included; Argon is selected from the matching Lua LuCI feed for compatibility
           - No top-right floating CPU/date/time badge is injected
           - CPU temperature remains available in the normal system/CPU status line when supported
@@ -6827,7 +6895,7 @@ jobs:
           - On retained upgrades, an untouched stock myshunt is removed, while
             a user-customized legacy myshunt is preserved
 
-          - Preloaded "R4 分流总节点" framework; ordinary preset rows start unused
+          - Preloaded "分流总节点" framework (internal UCI id remains R4Shunt); ordinary preset rows start unused
           - Rules include WeChat, QQ, LINE, WhatsApp, Signal, Telegram,
             Discord, Facebook, Instagram, X/Twitter, Reddit, Google,
             YouTube, Google AI/Gemini, Gmail/Drive, OpenAI/ChatGPT,
@@ -7438,7 +7506,7 @@ jobs:
           test -x files/usr/bin/doornet2-health
           sh -n files/usr/bin/doornet2-health
 
-          grep -q "R4 分流总节点" \
+          grep -q "R4Shunt.remarks='分流总节点'" \
             files/etc/uci-defaults/96-doornet2-passwall-shunt
 
           PASSWALL_DEFAULT_CFG="feeds/passwall_luci/luci-app-passwall/root/usr/share/passwall/0_default_config"
@@ -7502,11 +7570,19 @@ jobs:
             files/etc/uci-defaults/95-doornet2-ui
           grep -q "set luci.themes.Argon='/luci-static/argon'" \
             files/etc/uci-defaults/95-doornet2-ui
+          grep -q "system.@system\[0\].hostname='OpenWrt'" \
+            files/etc/uci-defaults/95-doornet2-ui
+          ! grep -q "system.@system\[0\].hostname='DoorNet2'" \
+            files/etc/uci-defaults/95-doornet2-ui
 
           test -x files/etc/uci-defaults/99-doornet2-argon-ui
           sh -n files/etc/uci-defaults/99-doornet2-argon-ui
           grep -q "mediaurlbase='/luci-static/argon'" \
             files/etc/uci-defaults/99-doornet2-argon-ui
+
+          test -f files/usr/lib/lua/luci/view/themes/argon/header.htm
+          grep -q 'OpenWrt</a>' \
+            files/usr/lib/lua/luci/view/themes/argon/header.htm
 
           test -f package/feeds/luci/luci-theme-argon/Makefile || \
             test -f feeds/luci/themes/luci-theme-argon/Makefile
