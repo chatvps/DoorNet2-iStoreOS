@@ -1,134 +1,128 @@
+name: DoorNet2-OpenWrt-iStore-R4-V5.3.4-Final-Solidified-NoUU-Argon181-IPv6Fix
 
-          test -x files/etc/uci-defaults/98-doornet2-time
-          sh -n files/etc/uci-defaults/98-doornet2-time
-          grep -q "zonename='Asia/Shanghai'" \
-            files/etc/uci-defaults/98-doornet2-time
+on:
+  workflow_dispatch:
 
-          test -x files/etc/uci-defaults/99-doornet2-argon-ui
-          sh -n files/etc/uci-defaults/99-doornet2-argon-ui
-          grep -q "mediaurlbase='/luci-static/argon'" \
-            files/etc/uci-defaults/99-doornet2-argon-ui
+permissions:
+  contents: write
 
-          # Thermal support is intentionally left to the existing RK3399/
-          # LuCI status stack. R4 adds no floating monitor frontend.
+jobs:
+  build_openwrt:
+    name: Build DoorNet2 OpenWrt Firmware
+    runs-on: ubuntu-22.04
 
+    steps:
 
-          echo
-          echo "===== R4 FINAL SOLIDIFIED POLICY ====="
+      # ============================================================
+      # 1. Build environment
+      # ============================================================
 
-          test ! -e files/etc/uci-defaults/99-v5.3.3-network-fix
-          test ! -e files/etc/uci-defaults/99-v5.3.3-network-fix
+      - name: Space cleanup and Initialization environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          set -e
 
-          grep -q 'api.example.com' files/etc/uci-defaults/96-doornet2-passwall-shunt
-          grep -q 'domain:speedtest.net' files/etc/uci-defaults/96-doornet2-passwall-shunt
-          grep -q 'DN_TencentDirect' files/etc/uci-defaults/96-doornet2-passwall-shunt
-          grep -q 'domain:qpic.cn' files/etc/uci-defaults/96-doornet2-passwall-shunt
-          grep -q 'domain:gtimg.com' files/etc/uci-defaults/96-doornet2-passwall-shunt
-          grep -q 'domain:qlogo.cn' files/etc/uci-defaults/96-doornet2-passwall-shunt
-          grep -q "R4Shunt.DN_TencentDirect='_direct'" files/etc/uci-defaults/96-doornet2-passwall-shunt
+          sudo rm -rf \
+            /usr/share/dotnet \
+            /usr/local/lib/android \
+            /opt/ghc \
+            /opt/hostedtoolcache/CodeQL \
+            2>/dev/null || true
 
-          test -s files/etc/adguardhome.yaml
-          grep -q 'port: 3053' files/etc/adguardhome.yaml
-          grep -q '127.0.0.1:6053' files/etc/adguardhome.yaml
-          grep -q 'name: AdGuard DNS filter' files/etc/adguardhome.yaml
-          grep -q 'aaaa_disabled: false' files/etc/adguardhome.yaml
-          grep -B2 -A2 'name: anti-AD' files/etc/adguardhome.yaml | grep -q 'enabled: false'
-          grep -A2 'name: anti-AD' files/etc/adguardhome.yaml | grep -q 'id: 900001'
+          docker system prune -af 2>/dev/null || true
 
-          echo "===== FINAL NO-UU GUARD ====="
-          test ! -e package/doornet2/luci-app-uugamebooster
-          test ! -e files/usr/bin/doornet2-uu
-          test ! -e files/etc/init.d/uu-delay
-          test -x files/etc/uci-defaults/92-doornet2-remove-uu
-          ! grep -q '^CONFIG_PACKAGE_luci-app-uugamebooster=y$' .config
-          ! grep -q '^CONFIG_PACKAGE_uugamebooster=y$' .config
+          sudo apt-get update
 
-          grep -Fxq 'nameserver /x.com/proxy-test' files/etc/smartdns/custom.conf
-          grep -Fxq 'nameserver /x.com/proxy-test' files/etc/smartdns/custom.conf
-          grep -Fxq 'address /x.com/#6' files/etc/smartdns/custom.conf
-          grep -Fxq 'nameserver /twitter.com/proxy-test' files/etc/smartdns/custom.conf
-          grep -Fxq 'address /twitter.com/#6' files/etc/smartdns/custom.conf
-          grep -Fxq 'nameserver /twimg.com/proxy-test' files/etc/smartdns/custom.conf
-          grep -Fxq 'address /twimg.com/#6' files/etc/smartdns/custom.conf
-          grep -Fxq 'nameserver /t.co/proxy-test' files/etc/smartdns/custom.conf
-          grep -Fxq 'address /t.co/#6' files/etc/smartdns/custom.conf
+          sudo apt-get install -y --no-install-recommends \
+            ack \
+            antlr3 \
+            asciidoc \
+            autoconf \
+            automake \
+            autopoint \
+            binutils \
+            bison \
+            build-essential \
+            bzip2 \
+            ccache \
+            clang \
+            cmake \
+            cpio \
+            curl \
+            device-tree-compiler \
+            flex \
+            gawk \
+            gcc-multilib \
+            g++-multilib \
+            gettext \
+            genisoimage \
+            git \
+            gperf \
+            haveged \
+            help2man \
+            intltool \
+            libc6-dev-i386 \
+            libelf-dev \
+            libfuse-dev \
+            libglib2.0-dev \
+            libgmp3-dev \
+            libltdl-dev \
+            libmpc-dev \
+            libmpfr-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            libpython3-dev \
+            libreadline-dev \
+            libssl-dev \
+            libtool \
+            llvm \
+            lrzsz \
+            msmtp \
+            ninja-build \
+            p7zip \
+            p7zip-full \
+            patch \
+            pkgconf \
+            python3 \
+            python3-pyelftools \
+            python3-setuptools \
+            qemu-utils \
+            rsync \
+            scons \
+            squashfs-tools \
+            subversion \
+            swig \
+            texinfo \
+            uglifyjs \
+            upx-ucl \
+            unzip \
+            vim \
+            wget \
+            xmlto \
+            xxd \
+            zlib1g-dev
 
-          test -x files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
-          sh -n files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
-          grep -q "network.wan.ipv6='auto'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
-          grep -q "network.wan.delegate='1'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
-          grep -q "network.wan6.auto='1'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
-          grep -q 'delete network.wan6.disabled' files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
-          if grep -q "network.wan6.auto='0'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4 || \
-             grep -q "network.wan6.disabled='1'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4; then
-              echo "ERROR: wan6 disable regression detected"
-              exit 1
-          fi
-          grep -q "dhcp.lan.ra='server'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
-          grep -q "dhcp.lan.dhcpv6='server'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
-          grep -q "filter_proxy_ipv6='1'" files/etc/uci-defaults/96-doornet2-passwall-shunt
-          grep -q "ipv6_tproxy='0'" files/etc/uci-defaults/96-doornet2-passwall-shunt
-          grep -q 'SmartDNS :6053 ready' files/etc/init.d/doornet2-dns-chain
-          grep -q 'AdGuard :3053 ready' files/etc/init.d/doornet2-dns-chain
-          grep -q 'PassWall proxy already running; skip restart' files/etc/init.d/passwall-delay
-          grep -q 'rm -f /etc/rc.d/S99passwall' files/etc/uci-defaults/98-doornet2-rc-cleanup
-          grep -q 'rm -f /etc/rc.d/S19passwall-delay' files/etc/uci-defaults/98-doornet2-rc-cleanup
-          test -x files/etc/init.d/adguardhome
-          sh -n files/etc/init.d/adguardhome
-          grep -q 'DNS-chain helper owns WAN/boot ordering' files/etc/init.d/adguardhome
-          grep -q 'procd_add_reload_trigger "adguardhome"' files/etc/init.d/adguardhome
+          sudo apt-get clean
+          sudo timedatectl set-timezone "Asia/Shanghai" || true
 
-          test -s files/etc/sysupgrade.conf
-          test -x files/usr/bin/doornet2-adguard-filter-defaults
-          sh -n files/usr/bin/doornet2-adguard-filter-defaults
-          grep -q 'https://anti-ad.net/easylist.txt' files/usr/bin/doornet2-adguard-filter-defaults
-
-          grep -q '^/etc/adguardhome.yaml$' files/etc/sysupgrade.conf
-          grep -q '^/etc/config/passwall$' files/etc/sysupgrade.conf
-          ! grep -q '^/etc/config/uuplugin$' files/etc/sysupgrade.conf
-
-          test -x files/usr/bin/doornet2-heal
-          test -x files/usr/bin/doornet2-dns-postpasswall
-          test -x files/etc/init.d/doornet2-selfheal
-          sh -n files/usr/bin/doornet2-heal
-          sh -n files/usr/bin/doornet2-dns-postpasswall
-          sh -n files/etc/init.d/doornet2-selfheal
-
-          echo
-          echo "===== EXTROOT ====="
-
-          cat files/etc/config/fstab
-
-          if grep -Eq \
-            "option[[:space:]]+target[[:space:]]+['\"]?/['\"]?" \
-            files/etc/config/fstab
-          then
-
-              echo "ERROR: extroot found"
-              exit 1
-
-          fi
+          df -h
 
 
-          echo
-          echo "===== RELEASE FILES ====="
+      # ============================================================
+      # 2. Checkout
+      # ============================================================
 
-          if [ -d ./artifact/release ]; then
-              ls -lah ./artifact/release/
-          else
-              echo "INFO: ./artifact/release was not prepared because an earlier required step failed."
-          fi
+      - name: Checkout OpenWrt
+        uses: actions/checkout@v4
 
-          echo
-          echo "========================================"
-          echo
-          echo "===== WAN PRESERVATION POLICY ====="
-          test -x files/etc/uci-defaults/96-doornet2-wan
-          sh -n files/etc/uci-defaults/96-doornet2-wan
-          grep -q 'WAN_PROTO="$(uci -q get network.wan.proto)"'             files/etc/uci-defaults/96-doornet2-wan
-          grep -q 'preserving existing proto='             files/etc/uci-defaults/96-doornet2-wan
-          grep -q 'retained credentials were found'             files/etc/uci-defaults/96-doornet2-wan
-          grep -q "DOORNET2_WAN_POLICY='preserve-existing-proto-and-pppoe-creds-v2'"             files/etc/doornet2_release
 
-          echo "R4 V5.3.4 FINAL SOLIDIFIED + NO-UU + WAN6 FIX + DNS POST-HOOK + CHATGPT REGRESSION READY"
-          echo "========================================"
+      - name: Remove insecure known default root password
+        shell: bash
+        run: |
+          set -e
+
+          # Upstream LEDE ships a uci-defaults hook that resets root to the
+          # well-known password "password". DoorNet2 must preserve the
+          # user's existing root credential instead.
+          mapfile -t ROOTPW_FILES < <(
