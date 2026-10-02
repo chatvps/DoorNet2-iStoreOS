@@ -5948,12 +5948,47 @@ jobs:
           ! grep -q '网易 UU 游戏加速器' files/usr/lib/lua/luci/view/doornet2/app_update.htm
           ! grep -q 'uu = true' files/usr/lib/lua/luci/controller/doornet2_app_update.lua
 
-          grep -q "add_list dhcp.@dnsmasq\\[0\\].server='127.0.0.1#3053'" \
-            files/etc/init.d/doornet2-dns-chain
-          grep -q "noresolv='1'" files/etc/init.d/doornet2-dns-chain
+          guard_require()
+          {
+              desc="$1"
+              shift
+              if "$@"; then
+                  echo "PASS: $desc"
+              else
+                  echo "ERROR: $desc"
+                  exit 1
+              fi
+          }
 
-          grep -q 'PassWall proxy core miss 1/2' files/usr/bin/doornet2-heal
-          grep -q "grep -Eq '\\[x\\]ray|\\[s\\]ing-box'" files/usr/bin/doornet2-heal
+          # V5.3.5 DNS failover guard:
+          # validate the new dynamic 3053/6053 switching logic instead of the
+          # old V5.3.4 hard-coded dnsmasq->3053 line.
+          guard_require "DNS chain has dynamic upstream setter" \
+            grep -q 'set_dnsmasq_upstream()' files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain can activate AdGuard primary" \
+            grep -q "set_dnsmasq_upstream '127.0.0.1#3053'" files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain can activate SmartDNS fallback" \
+            grep -q "set_dnsmasq_upstream '127.0.0.1#6053'" files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain performs real DNS query" \
+            grep -q 'dns_query_ok()' files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain records primary health" \
+            grep -q 'DNS primary healthy: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain records fallback health" \
+            grep -q 'DNS fallback healthy: dnsmasq:53 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
+
+          guard_require "post-PassWall can use AdGuard primary" \
+            grep -q "set_upstream '127.0.0.1#3053'" files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall can retain SmartDNS fallback" \
+            grep -q "set_upstream '127.0.0.1#6053'" files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall checks AdGuard process health" \
+            grep -q 'pidof AdGuardHome' files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall performs end-to-end DNS query" \
+            grep -q 'dns_query_ok()' files/usr/bin/doornet2-dns-postpasswall
+
+          guard_require "self-heal keeps two-strike PassWall guard" \
+            grep -q 'PassWall proxy core miss 1/2' files/usr/bin/doornet2-heal
+          guard_require "self-heal recognizes Xray or sing-box" \
+            grep -q "grep -Eq '\\[x\\]ray|\\[s\\]ing-box'" files/usr/bin/doornet2-heal
 
 
           if grep -R -nF 'root@DoorNet2:' \
