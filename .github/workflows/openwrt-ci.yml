@@ -1,4 +1,4 @@
-name: DoorNet2-OpenWrt-iStore-R4-V5.3.4-Final-Solidified-NoUU-Argon181-IPv6Fix
+name: DoorNet2-OpenWrt-iStore-R4-V5.3.5-Final-OnlineUpgrade-NoUU-DNSFailover-AdGuard10779
 
 on:
   workflow_dispatch:
@@ -399,7 +399,7 @@ jobs:
           echo "===== SMARTDNS / ADGUARD FROM NORMAL FEEDS ====="
 
           # Use the packages already matched to this LEDE tree for SmartDNS and
-          # AdGuard Home.  V5.3.4 intentionally removes the separately integrated
+          # AdGuard Home.  V5.3.5 intentionally removes the separately integrated
           # NetEase UU Game Booster stack.
           ./scripts/feeds install \
             -d y \
@@ -433,6 +433,46 @@ jobs:
           test -n "$(find feeds/luci -type f -name Makefile -path '*/luci-app-smartdns/Makefile' -print -quit)"
           test -n "$(find feeds/packages -type f -name Makefile -path '*/adguardhome/Makefile' -print -quit)"
           test ! -e package/doornet2/luci-app-uugamebooster
+
+
+      - name: Pin official AdGuard Home v0.107.79 arm64 runtime
+        run: |
+          set -euo pipefail
+
+          echo "===== PIN OFFICIAL ADGUARD HOME RUNTIME ====="
+
+          AGH_VERSION='v0.107.79'
+          AGH_ASSET='AdGuardHome_linux_arm64.tar.gz'
+          AGH_SHA256='3f7893c18e8aaadc456d0452839190561c306ca95175a2254958be80a769c1ae'
+          AGH_URL="https://github.com/AdguardTeam/AdGuardHome/releases/download/${AGH_VERSION}/${AGH_ASSET}"
+
+          rm -rf /tmp/doornet2-agh
+          mkdir -p /tmp/doornet2-agh files/usr/bin files/etc
+
+          curl --fail --location \
+            --retry 5 --retry-delay 3 --connect-timeout 20 \
+            --output "/tmp/doornet2-agh/${AGH_ASSET}" \
+            "${AGH_URL}"
+
+          echo "${AGH_SHA256}  /tmp/doornet2-agh/${AGH_ASSET}" | sha256sum -c -
+          tar -xzf "/tmp/doornet2-agh/${AGH_ASSET}" -C /tmp/doornet2-agh
+
+          test -x /tmp/doornet2-agh/AdGuardHome/AdGuardHome
+          install -m 0755 \
+            /tmp/doornet2-agh/AdGuardHome/AdGuardHome \
+            files/usr/bin/AdGuardHome
+
+          AGH_BIN_SHA256="$(sha256sum files/usr/bin/AdGuardHome | awk '{print $1}')"
+          cat > files/etc/doornet2_adguard_runtime <<EOF
+          ADGUARD_VERSION='${AGH_VERSION}'
+          ADGUARD_ASSET='${AGH_ASSET}'
+          ADGUARD_ARCHIVE_SHA256='${AGH_SHA256}'
+          ADGUARD_BINARY_SHA256='${AGH_BIN_SHA256}'
+          EOF
+
+          test -s files/usr/bin/AdGuardHome
+          test -s files/etc/doornet2_adguard_runtime
+          grep -q "ADGUARD_VERSION='v0.107.79'" files/etc/doornet2_adguard_runtime
 
 
       - name: Add QuickStart and Argon UI
@@ -689,25 +729,35 @@ jobs:
           cat > files/etc/uci-defaults/93-doornet2-dualstack-proxyv4 <<'EOF'
           #!/bin/sh
 
-          # DoorNet2 R4 field-verified split-stack policy:
+          # V5.3.5 adaptive dual-stack policy:
           # - Domestic/direct traffic may use native IPv4 + IPv6.
-          # - Domains routed through PassWall proxy keep IPv4 only; their AAAA
-          #   answers are filtered by PassWall (configured in the shunt preset).
-          # - Existing WAN/wan6 definitions are preserved; wan6 is never force-disabled.
+          # - PassWall proxy targets remain IPv4-only.
+          # - DHCP/static WAN keeps the standalone wan6 DHCPv6 client enabled.
+          # - PPPoE uses netifd's integrated IPv6/PD path and does not start a
+          #   second DHCPv6 client directly on eth0.
+
+          WAN_PROTO="$(uci -q get network.wan.proto)"
 
           if uci -q get network.wan >/dev/null 2>&1; then
               uci -q set network.wan.ipv6='auto'
               uci -q set network.wan.delegate='1'
           fi
 
-          # V5.3.4 field fix: a retained wan6 interface must remain enabled.
-          # V5.3.3 accidentally forced auto=0/disabled=1, which suppressed
-          # odhcp6c, the IPv6 default route and LAN prefix delegation on the
-          # validated DHCP-WAN setup.  Preserve the existing wan6 definition
-          # and only enforce autostart when it already exists.
           if uci -q get network.wan6 >/dev/null 2>&1; then
-              uci -q set network.wan6.auto='1'
-              uci -q delete network.wan6.disabled
+              case "$WAN_PROTO" in
+                  pppoe)
+                      # PPPoE already creates the IPv6 path on pppoe-wan.
+                      # Keep the retained wan6 section for compatibility, but
+                      # do not autostart a duplicate eth0 odhcp6c client.
+                      uci -q set network.wan6.auto='0'
+                      uci -q delete network.wan6.disabled
+                      ;;
+                  *)
+                      # DHCP/static upstreams need the standalone wan6 client.
+                      uci -q set network.wan6.auto='1'
+                      uci -q delete network.wan6.disabled
+                      ;;
+              esac
           fi
 
           if uci -q get network.lan >/dev/null 2>&1; then
@@ -729,7 +779,7 @@ jobs:
           chmod 755 files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           sh -n files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
 
-          # V5.3.4 removes the separately integrated UU stack.  The previous
+          # V5.3.5 removes the separately integrated UU stack.  The previous
           # firmware explicitly preserved /etc/config/uuplugin during sysupgrade,
           # so remove that retained configuration once on first boot of this image.
           cat > files/etc/uci-defaults/92-doornet2-remove-uu <<'EOF'
@@ -1132,18 +1182,28 @@ jobs:
               echo "$(date '+%Y-%m-%d %H:%M:%S') $*" >>"$LOG"
           }
 
-          smartdns_6053_ready()
+          port_ready()
           {
               netstat -lnptu 2>/dev/null \
-                | grep -E '[:.]6053[[:space:]]' \
+                | grep -E "[:.]$1[[:space:]]" \
                 >/dev/null 2>&1
           }
 
-          adguard_3053_ready()
+          dns_query_ok()
           {
-              netstat -lnptu 2>/dev/null \
-                | grep -E '[:.]3053[[:space:]]' \
-                >/dev/null 2>&1
+              nslookup www.baidu.com 127.0.0.1 >/dev/null 2>&1 || \
+              nslookup www.qq.com 127.0.0.1 >/dev/null 2>&1
+          }
+
+          set_dnsmasq_upstream()
+          {
+              target="$1"
+              uci -q delete dhcp.@dnsmasq[0].server
+              uci -q add_list dhcp.@dnsmasq[0].server="$target"
+              uci -q set dhcp.@dnsmasq[0].noresolv='1'
+              uci -q commit dhcp
+              /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+              sleep 2
           }
 
           prepare_smartdns()
@@ -1162,75 +1222,95 @@ jobs:
 
               i=0
               while [ "$i" -lt 45 ]; do
-                  smartdns_6053_ready && return 0
+                  port_ready 6053 && return 0
                   sleep 1
                   i=$((i + 1))
               done
-
               return 1
           }
 
-          activate_chain()
+          activate_fallback()
           {
-              # PassWall transparent routing is kept separate from DNS.
               if uci -q get passwall.@global[0] >/dev/null 2>&1; then
                   uci -q set passwall.@global[0].dns_redirect='0'
                   uci -q commit passwall
               fi
 
-              uci -q delete dhcp.@dnsmasq[0].server
-              uci -q add_list dhcp.@dnsmasq[0].server='127.0.0.1#3053'
-              uci -q set dhcp.@dnsmasq[0].noresolv='1'
-              uci -q commit dhcp
-              /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+              set_dnsmasq_upstream '127.0.0.1#6053'
+              if dns_query_ok; then
+                  log_msg "DNS fallback healthy: dnsmasq:53 -> SmartDNS:6053"
+                  return 0
+              fi
 
-              log_msg "DNS chain active: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053"
+              log_msg "ERROR: SmartDNS fallback query failed"
+              return 1
+          }
+
+          try_activate_adguard()
+          {
+              pidof AdGuardHome >/dev/null 2>&1 || return 1
+              port_ready 3053 || return 1
+
+              set_dnsmasq_upstream '127.0.0.1#3053'
+              if dns_query_ok; then
+                  log_msg "DNS primary healthy: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053"
+                  return 0
+              fi
+
+              log_msg "WARN: AdGuard port exists but DNS query failed; reverting to SmartDNS fallback"
+              activate_fallback >/dev/null 2>&1 || true
+              return 1
           }
 
           start()
           {
               (
                   : >"$LOG"
-                  log_msg "R4 DNS-chain helper started"
+                  log_msg "R4 V5.3.5 DNS failover coordinator started"
 
-                  # Field testing showed AdGuard could start before SmartDNS
-                  # and log connection-refused errors to 127.0.0.1:6053.
-                  # Enforce the validated order and never point dnsmasq at
-                  # AdGuard until both local upstreams are actually listening.
-                  if prepare_smartdns; then
-                      log_msg "SmartDNS :6053 ready"
-                  else
-                      log_msg "SmartDNS :6053 not ready; dnsmasq left unchanged"
+                  if ! prepare_smartdns; then
+                      log_msg "ERROR: SmartDNS :6053 not ready; leaving existing dnsmasq config unchanged"
+                      exit 0
+                  fi
+                  log_msg "SmartDNS :6053 ready"
+
+                  # Always establish the safe path first.  This makes retained
+                  # online upgrades survivable even when AdGuard's preserved
+                  # YAML cannot be parsed by the runtime.
+                  activate_fallback || true
+
+                  [ -x /usr/bin/doornet2-adguard-filter-defaults ] && \
+                    /usr/bin/doornet2-adguard-filter-defaults >/dev/null 2>&1 || true
+
+                  if [ ! -s /etc/adguardhome.yaml ] || [ ! -x /etc/init.d/adguardhome ]; then
+                      log_msg "AdGuard config/service missing; SmartDNS fallback retained"
                       exit 0
                   fi
 
-                  if [ -s /etc/adguardhome.yaml ] && [ -x /etc/init.d/adguardhome ]; then
+                  # Bounded retry: no more endless start storms when a retained
+                  # configuration is incompatible.
+                  attempt=1
+                  while [ "$attempt" -le 3 ]; do
                       /etc/init.d/adguardhome restart >/dev/null 2>&1 || true
-                  fi
 
-                  # First-run AdGuard setup may be completed after boot.
-                  # Watch for one hour and wire the chain as soon as :3053
-                  # becomes available.
-                  i=0
-                  while [ "$i" -lt 240 ]; do
-                      if adguard_3053_ready; then
-                          log_msg "AdGuard :3053 ready"
-                          activate_chain
-                          exit 0
-                      fi
+                      wait=0
+                      while [ "$wait" -lt 10 ]; do
+                          if try_activate_adguard; then
+                              log_msg "AdGuard activated on attempt $attempt"
+                              exit 0
+                          fi
+                          sleep 1
+                          wait=$((wait + 1))
+                      done
 
-                      # SmartDNS is already ready at this point, so a retry is
-                      # safe.  Keep AdGuard rc.d-disabled; the coordinator owns
-                      # boot order and may retry the service while waiting.
-                      if [ -s /etc/adguardhome.yaml ] && [ -x /etc/init.d/adguardhome ]; then
-                          /etc/init.d/adguardhome start >/dev/null 2>&1 || true
-                      fi
-
-                      sleep 15
-                      i=$((i + 1))
+                      log_msg "AdGuard attempt $attempt failed"
+                      attempt=$((attempt + 1))
+                      sleep 3
                   done
 
-                  log_msg "AdGuard :3053 not detected; dnsmasq left unchanged"
+                  /etc/init.d/adguardhome stop >/dev/null 2>&1 || true
+                  activate_fallback >/dev/null 2>&1 || true
+                  log_msg "AdGuard unavailable after bounded retries; SmartDNS fallback retained"
               ) &
           }
 
@@ -1257,13 +1337,34 @@ jobs:
               echo "$(date '+%Y-%m-%d %H:%M:%S') post-passwall: $*" >>"$LOG"
           }
 
-          # PassWall 25.1.15-1 on the validated V5.3.2/V5.3.3 baseline can
-          # generate a global dnsmasq bypass pointing ordinary client DNS at
-          # ChinaDNS-NG :15353. ChinaDNS-NG is PassWall-internal only.
-          #
-          # The audited generated file contained no ipset=/nftset= entries.
-          # Remove it only when one of the forbidden generic bypass directives
-          # is present; otherwise leave future PassWall-specific content alone.
+          port_ready()
+          {
+              netstat -lnptu 2>/dev/null | grep -E "[:.]$1[[:space:]]" >/dev/null 2>&1
+          }
+
+          dns_query_ok()
+          {
+              nslookup www.baidu.com 127.0.0.1 >/dev/null 2>&1 || \
+              nslookup www.qq.com 127.0.0.1 >/dev/null 2>&1
+          }
+
+          set_upstream()
+          {
+              target="$1"
+              current="$(uci -q get dhcp.@dnsmasq[0].server)"
+              if [ "$current" != "$target" ] || \
+                 [ "$(uci -q get dhcp.@dnsmasq[0].noresolv)" != '1' ]; then
+                  uci -q delete dhcp.@dnsmasq[0].server
+                  uci -q add_list dhcp.@dnsmasq[0].server="$target"
+                  uci -q set dhcp.@dnsmasq[0].noresolv='1'
+                  uci -q commit dhcp
+                  /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+                  sleep 2
+                  CHANGED=1
+              fi
+          }
+
+          # ChinaDNS-NG remains PassWall-internal only.
           if [ -f "$PW_DNSMASQ" ] && \
              grep -Eq '^(server=127\.0\.0\.1#15353|all-servers|no-poll|no-resolv)[[:space:]]*$' "$PW_DNSMASQ"
           then
@@ -1272,24 +1373,25 @@ jobs:
               CHANGED=1
           fi
 
-          CURRENT_SERVER="$(uci -q get dhcp.@dnsmasq[0].server)"
-          if [ "$CURRENT_SERVER" != '127.0.0.1#3053' ]; then
-              uci -q delete dhcp.@dnsmasq[0].server
-              uci -q add_list dhcp.@dnsmasq[0].server='127.0.0.1#3053'
-              CHANGED=1
+          # Never force 3053 merely because PassWall restarted.  AdGuard must
+          # have a live process and listening port first; the end-to-end query
+          # below decides whether the primary path is actually usable.
+          if pidof AdGuardHome >/dev/null 2>&1 && port_ready 3053; then
+              set_upstream '127.0.0.1#3053'
+              if dns_query_ok; then
+                  log_msg "AdGuard primary DNS confirmed"
+              else
+                  log_msg "AdGuard primary DNS query failed; reverting to SmartDNS :6053"
+                  set_upstream '127.0.0.1#6053'
+                  dns_query_ok || log_msg "ERROR: SmartDNS fallback query also failed"
+              fi
+          else
+              set_upstream '127.0.0.1#6053'
+              dns_query_ok || log_msg "ERROR: SmartDNS fallback query failed"
+              log_msg "AdGuard not healthy; SmartDNS fallback retained"
           fi
 
-          if [ "$(uci -q get dhcp.@dnsmasq[0].noresolv)" != '1' ]; then
-              uci -q set dhcp.@dnsmasq[0].noresolv='1'
-              CHANGED=1
-          fi
-
-          if [ "$CHANGED" = '1' ]; then
-              uci -q commit dhcp
-              /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-              log_msg "dnsmasq restarted after correction"
-          fi
-
+          [ "$CHANGED" = '1' ] && log_msg "dnsmasq policy corrected after PassWall event"
           exit 0
           EOF
 
@@ -1997,7 +2099,7 @@ jobs:
               if port_ready 3053; then
                   clear_fail adguard
               elif second_fail adguard; then
-                  log_msg "repair DNS chain / AdGuard Home :3053"
+                  log_msg "repair DNS policy / bounded AdGuard check"
                   /etc/init.d/doornet2-dns-chain restart >>"$LOG" 2>&1 || true
                   clear_fail adguard
               else
@@ -2033,7 +2135,6 @@ jobs:
               fi
           fi
 
-          log_msg "self-heal check complete"
           log_msg "self-heal check complete"
           exit 0
           EOF
@@ -2113,21 +2214,34 @@ jobs:
           log_msg "system boot readiness started"
           log_msg "hostname=$(uci -q get system.@system[0].hostname 2>/dev/null)"
 
-          wait_for "PPPoE IPv4" "ip -4 route 2>/dev/null | grep -q '^default '" 180 || true
+          wait_for "IPv4 default route" "ip -4 route 2>/dev/null | grep -q '^default '" 180 || true
           wait_for "IPv6 default route" "ip -6 route 2>/dev/null | grep -q '^default '" 180 || true
           wait_for "SmartDNS :6053" "port_ready 6053" 120 || true
-          wait_for "AdGuard :3053" "port_ready 3053" 120 || true
+          wait_for "local DNS query" "nslookup www.baidu.com 127.0.0.1" 60 || true
 
           DNS_NORESOLV="$(uci -q get dhcp.@dnsmasq[0].noresolv 2>/dev/null)"
           DNS_SERVER="$(uci -q get dhcp.@dnsmasq[0].server 2>/dev/null)"
           case ",$DNS_SERVER," in
               *,127.0.0.1#3053,*)
-                  log_msg "dnsmasq main chain ready: noresolv=$DNS_NORESOLV server=127.0.0.1#3053"
+                  if pidof AdGuardHome >/dev/null 2>&1 && port_ready 3053; then
+                      log_msg "dnsmasq primary chain active: noresolv=$DNS_NORESOLV server=127.0.0.1#3053"
+                  else
+                      log_msg "WARN dnsmasq points to 3053 but AdGuard is not healthy"
+                  fi
+                  ;;
+              *,127.0.0.1#6053,*)
+                  log_msg "dnsmasq fail-safe chain active: noresolv=$DNS_NORESOLV server=127.0.0.1#6053"
                   ;;
               *)
-                  log_msg "dnsmasq main chain not confirmed: noresolv=$DNS_NORESOLV server=$DNS_SERVER"
+                  log_msg "WARN unexpected dnsmasq chain: noresolv=$DNS_NORESOLV server=$DNS_SERVER"
                   ;;
           esac
+
+          if pidof AdGuardHome >/dev/null 2>&1 && port_ready 3053; then
+              log_msg "AdGuard :3053 ready"
+          else
+              log_msg "AdGuard :3053 unavailable; fail-safe DNS is acceptable"
+          fi
 
           if ps w 2>/dev/null | grep -Eq '[x]ray|[s]ing-box'; then
               log_msg "Xray/ sing-box ready"
@@ -2135,7 +2249,6 @@ jobs:
               log_msg "Xray/ sing-box not ready"
           fi
 
-          log_msg "system boot readiness complete"
           log_msg "system boot readiness complete"
           exit 0
           EOF
@@ -2646,10 +2759,11 @@ jobs:
           DOORNET2_PASSWALL='builtin-online-feed-shunt-v2'
           DOORNET2_NETWORK_APPS='smartdns-adguard-persist-online-v6'
           DOORNET2_SHUNT='preset-rules-tencent-direct-login-safe-v5'
-          DOORNET2_DNS_CHAIN='adguard-smartdns-postpasswall-v3'
+          DOORNET2_DNS_CHAIN='adguard-smartdns-postpasswall-v4'
+          DOORNET2_ADGUARD_RUNTIME='official-v0.107.79-arm64-sha256-v1'
           DOORNET2_PASSWALL_DELAY='route-aware-proxy-aware-v2'
           DOORNET2_HEALTH='selfcheck-selfheal-v3'
-          DOORNET2_FINAL_PROFILE='stable-final-v5.3.4-solidified-nouu-dualstack-proxyv4-slim-argon181'
+          DOORNET2_FINAL_PROFILE='stable-final-v5.3.5-solidified-nouu-dnsfailover-adguard10779-dualstack-proxyv4-slim-argon181'
           DOORNET2_RUNTIME_MONITOR='cpu-temp-status-only-v1'
           DOORNET2_IP_POLICY='domestic-dualstack-proxy-ipv4only-v1'
           DOORNET2_PERSISTENCE='sysupgrade-explicit-adguard-v2'
@@ -5078,7 +5192,7 @@ jobs:
       # Online-updatable userspace components:
       #   - PassWall proxy routing
       #   - SmartDNS DNS acceleration
-      #   - AdGuard Home DNS/ad blocking
+      # AdGuard Home is firmware-pinned and intentionally excluded from OPKG app updates.
       #
       # No kmod/kernel package is ever selected by this updater.
       # Packages come from DoorNet2's own GitHub OPKG feed built by the
@@ -5122,12 +5236,6 @@ jobs:
                       MAIN='smartdns'
                       SERVICE='smartdns'
                       FILTER='^(smartdns|smartdns-ui|luci-app-smartdns|luci-i18n-smartdns-.*)$'
-                      ;;
-                  adguard)
-                      LABEL='AdGuard Home'
-                      MAIN='adguardhome'
-                      SERVICE='adguardhome'
-                      FILTER='^(adguardhome|luci-app-adguardhome|luci-i18n-adguardhome-.*)$'
                       ;;
                   *)
                       return 1
@@ -5271,8 +5379,7 @@ jobs:
 
           local allowed = {
               passwall = true,
-              smartdns = true,
-              adguard = true
+              smartdns = true
           }
 
           function index()
@@ -5283,7 +5390,7 @@ jobs:
               local page = entry(
                   {"admin", "services", "doornet2_app_update"},
                   template("doornet2/app_update"),
-                  _("DoorNet2 组件在线升级"),
+                  _("OpenWrt 组件在线升级"),
                   98
               )
               page.dependent = false
@@ -5342,10 +5449,10 @@ jobs:
           cat > files/usr/lib/lua/luci/view/doornet2/app_update.htm <<'EOF'
           <%+header%>
 
-          <h2><%:DoorNet2 组件在线升级%></h2>
+          <h2><%:OpenWrt 组件在线升级%></h2>
 
           <div class="cbi-map-descr">
-            <%:这里仅更新用户态应用包，不更新内核/kmod，也不会刷写固件。软件包来自 DoorNet2 自己的 GitHub OPKG feed，与当前固件使用同一套编译环境。SmartDNS 与 AdGuard Home 都可能提供 DNS 服务，请先规划端口后再启用，避免同时占用 53 端口。%>
+            <%:这里仅更新 PassWall 与 SmartDNS 用户态应用包，不更新内核/kmod，也不会刷写固件。AdGuard Home 由固件固定为兼容版本，避免 OPKG 降级造成 DNS 故障。%>
           </div>
 
           <p>
@@ -5372,8 +5479,7 @@ jobs:
           <script type="text/javascript">
           var components = [
               ['passwall', 'PassWall 代理分流'],
-              ['smartdns', 'SmartDNS DNS 加速'],
-              ['adguard', 'AdGuard Home']
+              ['smartdns', 'SmartDNS DNS 加速']
           ];
 
           function esc(s) {
@@ -5465,7 +5571,7 @@ jobs:
           echo "===== NETWORK APPS ONLINE UPDATER ====="
           sh -n files/usr/bin/doornet2-app-updater
           grep -nE \
-            'DoorNet2 组件在线升级|doornet2-app-updater' \
+            'OpenWrt 组件在线升级|doornet2-app-updater' \
             files/usr/lib/lua/luci/controller/doornet2_app_update.lua
 
 
@@ -5553,7 +5659,7 @@ jobs:
           CONFIG_PACKAGE_smartdns=y
           CONFIG_PACKAGE_luci-app-smartdns=y
           CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y
-          # V5.3.4: NetEase UU Game Booster is intentionally not included.
+          # V5.3.5: NetEase UU Game Booster is intentionally not included.
           # CONFIG_PACKAGE_luci-app-uugamebooster is not set
           # CONFIG_PACKAGE_uugamebooster is not set
           CONFIG_PACKAGE_adguardhome=y
@@ -5722,7 +5828,7 @@ jobs:
           grep -q '^CONFIG_PACKAGE_adguardhome=y$' .config
 
           if grep -Eq '^CONFIG_PACKAGE_(luci-app-uugamebooster|uugamebooster)=y$' .config; then
-              echo 'ERROR: UU package unexpectedly selected in V5.3.4 no-UU profile.'
+              echo 'ERROR: UU package unexpectedly selected in V5.3.5 no-UU profile.'
               grep -E '^CONFIG_PACKAGE_(luci-app-uugamebooster|uugamebooster)=y$' .config || true
               exit 1
           fi
@@ -5732,6 +5838,7 @@ jobs:
 
           test -x files/usr/bin/doornet2-app-updater
           sh -n files/usr/bin/doornet2-app-updater
+          ! grep -Eq '^[[:space:]]*adguard\)' files/usr/bin/doornet2-app-updater
           test -x files/etc/uci-defaults/97-doornet2-network-apps
           sh -n files/etc/uci-defaults/97-doornet2-network-apps
           test -x files/etc/init.d/doornet2-dns-chain
@@ -5773,7 +5880,7 @@ jobs:
             files/etc/uci-defaults/96-doornet2-passwall-shunt
 
           echo
-          echo "===== V5.3.4 DUALSTACK + PROXY IPv4 + ARGON PACKAGES ====="
+          echo "===== V5.3.5 DUALSTACK + PROXY IPv4 + ARGON PACKAGES ====="
 
           grep -E \
             '^CONFIG_PACKAGE_(quickstart|luci-app-quickstart|luci-i18n-quickstart-zh-cn|luci-theme-bootstrap)=y$' \
@@ -5795,12 +5902,12 @@ jobs:
           test ! -e files/etc/config/design
 
 
-      - name: V5.3.4 solidified precompile source guards
+      - name: V5.3.5 solidified precompile source guards
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "===== V5.3.4 SOURCE GUARDS ====="
+          echo "===== V5.3.5 SOURCE GUARDS ====="
 
           for f in \
             files/etc/init.d/doornet2-dns-chain \
@@ -5874,7 +5981,7 @@ jobs:
               exit 1
           fi
 
-          echo "V5.3.4 solidified source guards: PASS"
+          echo "V5.3.5 solidified source guards: PASS"
 
 
       # ============================================================
@@ -5891,7 +5998,7 @@ jobs:
             -size -1024c \
             -exec rm -f {} \;
 
-          # V5.3.4 no-UU guard: neither UU package may appear in the selected
+          # V5.3.5 no-UU guard: neither UU package may appear in the selected
           # download plan.
           if grep -Eq '^CONFIG_PACKAGE_(luci-app-uugamebooster|uugamebooster)=y$' .config; then
               echo "ERROR: UU package unexpectedly selected."
@@ -6276,12 +6383,13 @@ jobs:
             "self_heal": "service-aware-two-strike-v2",
             "root_auth": "preserve-user-password-no-known-default-v1",
             "shunt_presets": "preset-rules-tencent-direct-login-safe-v5",
-            "dns_chain": "adguard-smartdns-postpasswall-v3",
+            "dns_chain": "adguard-smartdns-postpasswall-v4",
+            "adguard_runtime": "official-v0.107.79-arm64-sha256-v1",
             "passwall_delay": "route-aware-proxy-aware-v2",
             "health_check": "selfcheck-selfheal-v3",
             "dns_postpasswall": "main-dns-guard-v1",
             "smartdns_openai": "proxytest-ipv4only-reboot-validated-v1",
-            "profile": "stable-final-v5.3.4-solidified-nouu-dualstack-proxyv4-slim-argon181",
+            "profile": "stable-final-v5.3.5-solidified-nouu-dnsfailover-adguard10779-dualstack-proxyv4-slim-argon181",
             "release": "R4"
           }
           EOF
@@ -6342,19 +6450,19 @@ jobs:
           - Native LEDE ip6tables userspace and kmod-ip6tables support are included
           - Xray is the only built-in proxy core; optional legacy/newer cores remain disabled
 
-          V5.3.4 Final Solidified no-UU stability profile:
+          V5.3.5 Final Solidified online-upgrade stability profile:
 
           - LAN management IP remains 192.168.100.1
           - Lua-compatible Argon + normal Status/Overview are the default experience
           - The old top-right CPU/date/time floating badge stays removed
           - TF-first / eMMC-fallback boot and physical upgrade guards are retained
-          - Online firmware updater, PassWall updater and network-app updater are retained
+          - OpenWrt firmware updater, PassWall updater and network-app updater are retained; AdGuard is firmware-managed and excluded from OPKG component updates
           - The separately integrated NetEase UU Game Booster package/runtime/guards are removed
           - PassWall has a route-aware, proxy-aware delayed recovery guard; it skips redundant restart when Xray/sing-box is already running
           - X/Twitter parent domains (x.com/twitter.com/twimg.com/t.co) use proxy-test IPv4-only DNS while domestic/direct DNS remains dual-stack
-          - AdGuard YAML is preserved across sysupgrade; clean installs include a :3053 -> SmartDNS :6053 baseline config
-          - DNS-chain helper enforces SmartDNS :6053 readiness before AdGuard :3053, then points dnsmasq at AdGuard
-          - PassWall start/restart runs a DoorNet2 post-hook that removes the validated global :15353 dnsmasq bypass and restores main DNS to AdGuard :3053 only when correction is needed
+          - AdGuard Home runtime is pinned to official v0.107.79 arm64 with SHA256 verification; retained schema-29 YAML is preserved across online sysupgrade
+          - DNS-chain helper establishes SmartDNS :6053 fail-safe first, then enables AdGuard :3053 only after a successful end-to-end DNS query
+          - PassWall start/restart removes the global :15353 bypass but never forces :3053 unless AdGuard is healthy; otherwise dnsmasq stays on SmartDNS :6053
           - SmartDNS keeps the reboot-validated OpenAI/ChatGPT proxy-test rules and proxy-domain AAAA suppression; domestic/direct DNS remains dual-stack
           - WeChat / QQ / Tencent media domains remain forced direct; no global TCP/10001, MTU/MSS or IPv6 workaround is added
           - /usr/bin/doornet2-health provides a read-only whole-system self-check
@@ -6364,7 +6472,7 @@ jobs:
           - PassWall forced-direct rule includes api.example.com and speedtest.net + subdomains
           - High-priority Tencent direct rule covers WeChat, QQ, qpic/gtimg/idqqimg/qlogo and weixinbridge media traffic
           - /etc/sysupgrade.conf explicitly retains network/PassWall/SmartDNS/AdGuard user configuration
-          - Existing WAN protocol is preserved across retained sysupgrade; PPPoE is never replaced by the DHCP fallback
+          - Existing WAN protocol is preserved; DHCP/static WAN keeps standalone wan6 enabled while PPPoE avoids a duplicate eth0 DHCPv6 client
           - If retained PPPoE credentials exist but proto is missing, PPPoE is reconstructed instead of falling back to DHCP
           - The upstream known root password "password" hook is removed; retained root credentials are never reset by the image
           - No personal PPPoE credentials, proxy node IDs or AdGuard password are baked into firmware
@@ -6663,7 +6771,7 @@ jobs:
           fi
 
           echo "========================================"
-          echo "DoorNet2 R4 V5.3.4 Final Solidified no-UU build finished"
+          echo "DoorNet2 R4 V5.3.5 Final Solidified no-UU build finished"
           echo "========================================"
 
           echo
@@ -6966,6 +7074,7 @@ jobs:
 
           test -x files/usr/bin/doornet2-app-updater
           sh -n files/usr/bin/doornet2-app-updater
+          ! grep -Eq '^[[:space:]]*adguard\)' files/usr/bin/doornet2-app-updater
 
           test -x files/etc/uci-defaults/97-doornet2-network-apps
           sh -n files/etc/uci-defaults/97-doornet2-network-apps
@@ -7015,7 +7124,7 @@ jobs:
           fi
 
           echo
-          echo "===== V5.3.4 FINAL ARGON + BOOTSTRAP FALLBACK ====="
+          echo "===== V5.3.5 FINAL ARGON + BOOTSTRAP FALLBACK ====="
 
           grep -q \
             "DOORNET2_UI='slim-source-argon-1.8.1-extracted-with-bootstrap-fallback-v1'" \
@@ -7126,24 +7235,32 @@ jobs:
           sh -n files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           grep -q "network.wan.ipv6='auto'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           grep -q "network.wan.delegate='1'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
+          grep -q 'WAN_PROTO=' files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
+          grep -q 'pppoe)' files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
+          grep -q "network.wan6.auto='0'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           grep -q "network.wan6.auto='1'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           grep -q 'delete network.wan6.disabled' files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
-          if grep -q "network.wan6.auto='0'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4 || \
-             grep -q "network.wan6.disabled='1'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4; then
-              echo "ERROR: wan6 disable regression detected"
-              exit 1
-          fi
+          ! grep -q "network.wan6.disabled='1'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           grep -q "dhcp.lan.ra='server'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           grep -q "dhcp.lan.dhcpv6='server'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           grep -q "filter_proxy_ipv6='1'" files/etc/uci-defaults/96-doornet2-passwall-shunt
           grep -q "ipv6_tproxy='0'" files/etc/uci-defaults/96-doornet2-passwall-shunt
           grep -q 'SmartDNS :6053 ready' files/etc/init.d/doornet2-dns-chain
-          grep -q 'AdGuard :3053 ready' files/etc/init.d/doornet2-dns-chain
+          grep -q 'DNS fallback healthy: dnsmasq:53 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
+          grep -q 'DNS primary healthy: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
+          grep -q 'while \[ "$attempt" -le 3 \]' files/etc/init.d/doornet2-dns-chain
+          grep -q "set_upstream '127.0.0.1#6053'" files/usr/bin/doornet2-dns-postpasswall
+          test -s files/usr/bin/AdGuardHome
+          test -s files/etc/doornet2_adguard_runtime
+          grep -q "ADGUARD_VERSION='v0.107.79'" files/etc/doornet2_adguard_runtime
           grep -q 'PassWall proxy already running; skip restart' files/etc/init.d/passwall-delay
           grep -q 'rm -f /etc/rc.d/S99passwall' files/etc/uci-defaults/98-doornet2-rc-cleanup
           grep -q 'rm -f /etc/rc.d/S19passwall-delay' files/etc/uci-defaults/98-doornet2-rc-cleanup
           test -x files/etc/init.d/adguardhome
           sh -n files/etc/init.d/adguardhome
+          test -s files/usr/bin/AdGuardHome
+          test -s files/etc/doornet2_adguard_runtime
+          grep -q "ADGUARD_VERSION='v0.107.79'" files/etc/doornet2_adguard_runtime
           grep -q 'DNS-chain helper owns WAN/boot ordering' files/etc/init.d/adguardhome
           grep -q 'procd_add_reload_trigger "adguardhome"' files/etc/init.d/adguardhome
 
@@ -7199,5 +7316,5 @@ jobs:
           grep -q 'retained credentials were found'             files/etc/uci-defaults/96-doornet2-wan
           grep -q "DOORNET2_WAN_POLICY='preserve-existing-proto-and-pppoe-creds-v2'"             files/etc/doornet2_release
 
-          echo "R4 V5.3.4 FINAL SOLIDIFIED + NO-UU + WAN6 FIX + DNS POST-HOOK + CHATGPT REGRESSION READY"
+          echo "R4 V5.3.5 FINAL SOLIDIFIED + NO-UU + ADGUARD10779 + DNS FAILOVER + ADAPTIVE WAN6 READY"
           echo "========================================"
