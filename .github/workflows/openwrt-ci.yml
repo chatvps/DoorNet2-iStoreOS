@@ -392,15 +392,16 @@ jobs:
           grep -nE '^PKG_(VERSION|HASH):=|GO_PKG_LDFLAGS_X|core\.build|core\.version' "$XRAY_MK"
 
 
-      - name: Add DNS acceleration and AdGuard packages (UU removed)
+      - name: Add DNS acceleration, AdGuard and preserve UU packages
         run: |
           set -e
 
           echo "===== SMARTDNS / ADGUARD FROM NORMAL FEEDS ====="
 
           # Use the packages already matched to this LEDE tree for SmartDNS and
-          # AdGuard Home.  V5.3.5 intentionally removes the separately integrated
-          # NetEase UU Game Booster stack.
+          # AdGuard Home. Keep feed-provided NetEase UU Game Booster package sources
+          # available so retained online upgrades do not delete the user's separately
+          # installed UU app. UU settings remain user-managed.
           ./scripts/feeds install \
             -d y \
             -f \
@@ -414,25 +415,10 @@ jobs:
             -p luci \
             luci-app-smartdns
 
-          echo "===== REMOVE CUSTOM UU PACKAGE SOURCES ====="
-
-          # Do not ship either the old fixed-download package or the custom
-          # runtime-downloader LuCI package that previous DoorNet2 builds added.
-          rm -rf \
-            package/feeds/packages/uugamebooster \
-            package/feeds/luci/luci-app-uugamebooster \
-            package/feeds/istore_packages/uugamebooster \
-            package/feeds/istore_packages/luci-app-uugamebooster \
-            package/lean/uugamebooster \
-            package/lean/luci-app-uugamebooster \
-            package/doornet2/luci-app-uugamebooster
-
-          echo "===== VERIFY NETWORK APP SOURCES ====="
-
-          test -n "$(find feeds/packages -type f -name Makefile -path '*/smartdns/Makefile' -print -quit)"
-          test -n "$(find feeds/luci -type f -name Makefile -path '*/luci-app-smartdns/Makefile' -print -quit)"
-          test -n "$(find feeds/packages -type f -name Makefile -path '*/adguardhome/Makefile' -print -quit)"
-          test ! -e package/doornet2/luci-app-uugamebooster
+          echo "===== PRESERVE UU PACKAGE SOURCES ====="
+          find feeds -type f             \( -path '*/uugamebooster/Makefile' -o -path '*/luci-app-uugamebooster/Makefile' \)             -print 2>/dev/null | head -20 || true
+          test -n "$(find feeds -type f -path '*/uugamebooster/Makefile' -print -quit 2>/dev/null)"
+          test -n "$(find feeds -type f -path '*/luci-app-uugamebooster/Makefile' -print -quit 2>/dev/null)"
 
 
       - name: Pin official AdGuard Home v0.107.79 arm64 runtime
@@ -779,28 +765,7 @@ jobs:
           chmod 755 files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           sh -n files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
 
-          # V5.3.5 removes the separately integrated UU stack.  The previous
-          # firmware explicitly preserved /etc/config/uuplugin during sysupgrade,
-          # so remove that retained configuration once on first boot of this image.
-          cat > files/etc/uci-defaults/92-doornet2-remove-uu <<'EOF'
-          #!/bin/sh
-
-          if [ -x /etc/init.d/uuplugin ]; then
-              /etc/init.d/uuplugin stop >/dev/null 2>&1 || true
-              /etc/init.d/uuplugin disable >/dev/null 2>&1 || true
-          fi
-
-          rm -f /etc/config/uuplugin
-          rm -f /etc/rc.d/*uuplugin* /etc/rc.d/*uu-delay*
-          rm -rf /var/tmp/uu
-          rm -f /tmp/uu.tar.gz /tmp/uu.tar.gz.part /tmp/uu-delay.log
-          rm -rf /tmp/luci-indexcache /tmp/luci-modulecache
-
-          exit 0
-          EOF
-
-          chmod 755 files/etc/uci-defaults/92-doornet2-remove-uu
-          sh -n files/etc/uci-defaults/92-doornet2-remove-uu
+          # UU is user-managed. Do not stop, disable, delete, or rewrite it on first boot.
 
           # Explicit persistence policy for retained sysupgrades. Standard UCI
           # files are already preserved by OpenWrt; these entries make the R4
@@ -815,8 +780,11 @@ jobs:
           /etc/config/passwall
           /etc/config/smartdns
           /etc/config/adguardhome
+          /etc/config/uuplugin
+          /etc/config/uugamebooster
           /etc/adguardhome.yaml
           /etc/smartdns/
+          /usr/share/uugamebooster/uu.conf
           EOF
 
           # Clean-install AdGuard Home baseline.  On retained sysupgrade the
@@ -2817,7 +2785,7 @@ jobs:
           DOORNET2_ADGUARD_RUNTIME='official-v0.107.79-arm64-sha256-v1'
           DOORNET2_PASSWALL_DELAY='route-aware-proxy-aware-v2'
           DOORNET2_HEALTH='selfcheck-selfheal-v3'
-          DOORNET2_FINAL_PROFILE='stable-final-v5.3.5-solidified-nouu-dnsfailover-adguard10779-dualstack-proxyv4-slim-argon181'
+          DOORNET2_FINAL_PROFILE='stable-final-v5.3.5-solidified-uu-preserve-dnsfailover-adguard10779-dualstack-proxyv4-slim-argon181'
           DOORNET2_RUNTIME_MONITOR='cpu-temp-status-only-v1'
           DOORNET2_IP_POLICY='domestic-dualstack-proxy-ipv4only-v1'
           DOORNET2_PERSISTENCE='sysupgrade-explicit-adguard-v2'
@@ -5713,9 +5681,11 @@ jobs:
           CONFIG_PACKAGE_smartdns=y
           CONFIG_PACKAGE_luci-app-smartdns=y
           CONFIG_PACKAGE_luci-i18n-smartdns-zh-cn=y
-          # V5.3.5: NetEase UU Game Booster is intentionally not included.
-          # CONFIG_PACKAGE_luci-app-uugamebooster is not set
-          # CONFIG_PACKAGE_uugamebooster is not set
+          # NetEase UU Game Booster is retained as a user-managed app.
+          # Firmware does not change its settings; selecting the packages prevents
+          # a retained online upgrade from dropping the installed app.
+          CONFIG_PACKAGE_luci-app-uugamebooster=y
+          CONFIG_PACKAGE_uugamebooster=y
           CONFIG_PACKAGE_adguardhome=y
 
           # iStoreOS-style QuickStart dashboard
@@ -5881,13 +5851,9 @@ jobs:
           grep -q '^CONFIG_PACKAGE_luci-app-smartdns=y$' .config
           grep -q '^CONFIG_PACKAGE_adguardhome=y$' .config
 
-          if grep -Eq '^CONFIG_PACKAGE_(luci-app-uugamebooster|uugamebooster)=y$' .config; then
-              echo 'ERROR: UU package unexpectedly selected in V5.3.5 no-UU profile.'
-              grep -E '^CONFIG_PACKAGE_(luci-app-uugamebooster|uugamebooster)=y$' .config || true
-              exit 1
-          fi
+          grep -q '^CONFIG_PACKAGE_luci-app-uugamebooster=y$' .config
+          grep -q '^CONFIG_PACKAGE_uugamebooster=y$' .config
 
-          test ! -e package/doornet2/luci-app-uugamebooster
           echo 'UU packages: absent/not selected (OK)'
 
           test -x files/usr/bin/doornet2-app-updater
@@ -5984,8 +5950,83 @@ jobs:
           grep -Fxq 'address /openai.com.cdn.cloudflare.net/#6' files/etc/smartdns/custom.conf
           grep -Fxq 'nameserver /x.com/proxy-test' files/etc/smartdns/custom.conf
           grep -Fxq 'address /x.com/#6' files/etc/smartdns/custom.conf
-          grep -Fxq
+          grep -Fxq 'nameserver /twitter.com/proxy-test' files/etc/smartdns/custom.conf
+          grep -Fxq 'address /twitter.com/#6' files/etc/smartdns/custom.conf
+          grep -Fxq 'nameserver /twimg.com/proxy-test' files/etc/smartdns/custom.conf
+          grep -Fxq 'address /twimg.com/#6' files/etc/smartdns/custom.conf
+          grep -Fxq 'nameserver /t.co/proxy-test' files/etc/smartdns/custom.conf
+          grep -Fxq 'address /t.co/#6' files/etc/smartdns/custom.conf
+
+          echo "===== UU USER-MANAGED SOURCE GUARD ====="
+          test ! -e files/usr/bin/doornet2-uu
+          test ! -e files/etc/init.d/uu-delay
+          test ! -e files/etc/uci-defaults/92-doornet2-remove-uu
+
+          ! grep -q '网易 UU 游戏加速器' files/usr/bin/doornet2-app-updater
+          ! grep -q '网易 UU 游戏加速器' files/usr/lib/lua/luci/view/doornet2/app_update.htm
+          ! grep -q 'uu = true' files/usr/lib/lua/luci/controller/doornet2_app_update.lua
+
+          guard_require()
+          {
+              desc="$1"
+              shift
+              if "$@"; then
+                  echo "PASS: $desc"
+              else
+                  echo "ERROR: $desc"
+                  exit 1
+              fi
+          }
+
+          # V5.3.5 DNS failover guard:
+          # validate the new dynamic 3053/6053 switching logic instead of the
+          # old V5.3.4 hard-coded dnsmasq->3053 line.
+          guard_require "DNS chain has dynamic upstream setter" \
+            grep -q 'set_dnsmasq_upstream()' files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain can activate AdGuard primary" \
+            grep -q "set_dnsmasq_upstream '127.0.0.1#3053'" files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain can activate SmartDNS fallback" \
+            grep -q "set_dnsmasq_upstream '127.0.0.1#6053'" files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain performs real DNS query" \
+            grep -q 'dns_query_port_ok()' files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain records primary health" \
+            grep -q 'DNS primary healthy: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
+          guard_require "DNS chain records fallback health" \
             grep -q 'DNS fallback healthy: dnsmasq:53 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
+
+          guard_require "post-PassWall can use AdGuard primary" \
+            grep -q "set_upstream '127.0.0.1#3053'" files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall can retain SmartDNS fallback" \
+            grep -q "set_upstream '127.0.0.1#6053'" files/usr/bin/doornet2-dns-postpasswall
+          grep -q 'china-dns 127.0.0.1#6053' files/usr/bin/doornet2-dns-postpasswall
+          grep -q 'group-upstream 127.0.0.1#6053' files/usr/bin/doornet2-dns-postpasswall
+          grep -q 'dns_query_port_ok 15353' files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall checks AdGuard process health" \
+            grep -q 'pidof AdGuardHome' files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall performs direct port DNS query" \
+            grep -q 'dns_query_port_ok()' files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall repairs ChinaDNS 3053 to SmartDNS 6053" \
+            grep -q 'ChinaDNS domestic/direct/vps upstream corrected: 3053 -> 6053' files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall validates ChinaDNS 15353" \
+            grep -q 'dns_query_port_ok 15353' files/usr/bin/doornet2-dns-postpasswall
+
+          guard_require "self-heal keeps two-strike PassWall guard" \
+            grep -q 'PassWall proxy core miss 1/2' files/usr/bin/doornet2-heal
+          guard_require "self-heal recognizes Xray or sing-box" \
+            grep -q "grep -Eq '\\[x\\]ray|\\[s\\]ing-box'" files/usr/bin/doornet2-heal
+
+
+          if grep -R -nF 'root@DoorNet2:' \
+               files/etc/init.d files/etc/uci-defaults files/usr/bin 2>/dev/null; then
+              echo "ERROR: copied shell prompt found in firmware source"
+              exit 1
+          fi
+
+          if grep -R -nF -- '-ash:' \
+               files/etc/init.d files/etc/uci-defaults files/usr/bin 2>/dev/null; then
+              echo "ERROR: copied shell diagnostic found in firmware source"
+              exit 1
+          fi
 
           if grep -R -nE '\\[https?://' \
                files/etc/init.d files/etc/uci-defaults files/usr/bin 2>/dev/null; then
@@ -6017,23 +6058,20 @@ jobs:
             -size -1024c \
             -exec rm -f {} \;
 
-          # V5.3.5 no-UU guard: neither UU package may appear in the selected
-          # download plan.
-          if grep -Eq '^CONFIG_PACKAGE_(luci-app-uugamebooster|uugamebooster)=y$' .config; then
-              echo "ERROR: UU package unexpectedly selected."
-              exit 1
-          fi
+          # V5.3.5 UU-preserve guard: keep both feed-provided UU packages in the
+          # download/build plan so retained online upgrades do not remove the app.
+          grep -q '^CONFIG_PACKAGE_luci-app-uugamebooster=y$' .config
+          grep -q '^CONFIG_PACKAGE_uugamebooster=y$' .config
 
 
       - name: Preflight package selection sanity checks
         run: |
           set -e
 
-          echo "===== PREFLIGHT NO-UU PROFILE ====="
-          test ! -e package/doornet2/luci-app-uugamebooster
-          ! grep -q '^CONFIG_PACKAGE_luci-app-uugamebooster=y$' .config
-          ! grep -q '^CONFIG_PACKAGE_uugamebooster=y$' .config
-          echo "UU packages are excluded (OK)"
+          echo "===== PREFLIGHT UU PRESERVE PROFILE ====="
+          grep -q '^CONFIG_PACKAGE_luci-app-uugamebooster=y$' .config
+          grep -q '^CONFIG_PACKAGE_uugamebooster=y$' .config
+          echo "UU packages selected for retained online-upgrade preservation (OK)"
 
           echo "===== PREFLIGHT PASSWALL GO COMPATIBILITY ====="
           echo "===== PREFLIGHT PASSWALL GO COMPATIBILITY ====="
@@ -6177,22 +6215,8 @@ jobs:
               exit 1
           fi
 
-          echo "===== BUILT ROOTFS NO-UU GUARD ====="
-          test ! -e "$ROOTFS_DIR/etc/init.d/uuplugin"
-          test ! -e "$ROOTFS_DIR/etc/config/uuplugin"
-          test ! -e "$ROOTFS_DIR/usr/bin/doornet2-uu"
-          test ! -e "$ROOTFS_DIR/etc/init.d/uu-delay"
-          test ! -e "$ROOTFS_DIR/usr/lib/lua/luci/model/cbi/uuplugin.lua"
-
-          if find "$ROOTFS_DIR" \
-               \( -name 'uuplugin' -o -name 'uuplugin.lua' -o -name '*uugamebooster*' -o -name 'doornet2-uu' -o -name 'uu-delay' \) \
-               -print | grep -q .; then
-              echo "ERROR: built rootfs still contains UU files"
-              find "$ROOTFS_DIR" \
-                \( -name 'uuplugin' -o -name 'uuplugin.lua' -o -name '*uugamebooster*' -o -name 'doornet2-uu' -o -name 'uu-delay' \) \
-                -print
-              exit 1
-          fi
+          echo "===== BUILT ROOTFS UU PRESERVE GUARD ====="
+          test -n "$(find "$ROOTFS_DIR" -iname '*uugamebooster*' -print -quit 2>/dev/null)"
 
           SMARTDNS_CUSTOM_FILE="$ROOTFS_DIR/etc/smartdns/custom.conf"
           test -f "$SMARTDNS_CUSTOM_FILE"
@@ -6292,7 +6316,7 @@ jobs:
               exit 1
           fi
 
-          echo "Built rootfs WAN/root-auth/no-UU/AdGuard/Tencent-direct/Argon safety checks passed"
+          echo "Built rootfs WAN/root-auth/UU-preserve/AdGuard/Tencent-direct/Argon safety checks passed"
 
 
       # ============================================================
@@ -6408,7 +6432,7 @@ jobs:
             "health_check": "selfcheck-selfheal-v3",
             "dns_postpasswall": "chinadns-smartdns-guard-v2",
             "smartdns_openai": "proxytest-ipv4only-reboot-validated-v1",
-            "profile": "stable-final-v5.3.5-solidified-nouu-dnsfailover-adguard10779-dualstack-proxyv4-slim-argon181",
+            "profile": "stable-final-v5.3.5-solidified-uu-preserve-dnsfailover-adguard10779-dualstack-proxyv4-slim-argon181",
             "release": "R4"
           }
           EOF
@@ -6790,7 +6814,7 @@ jobs:
           fi
 
           echo "========================================"
-          echo "DoorNet2 R4 V5.3.5 Final Solidified no-UU build finished"
+          echo "DoorNet2 R4 V5.3.5 Final Solidified UU-preserve build finished"
           echo "========================================"
 
           echo
@@ -7083,13 +7107,9 @@ jobs:
           grep -q '^CONFIG_PACKAGE_luci-app-smartdns=y$' .config
           grep -q '^CONFIG_PACKAGE_adguardhome=y$' .config
 
-          if grep -Eq '^CONFIG_PACKAGE_(luci-app-uugamebooster|uugamebooster)=y$' .config; then
-              echo 'ERROR: UU package unexpectedly selected in final no-UU config.'
-              grep -E '^CONFIG_PACKAGE_(luci-app-uugamebooster|uugamebooster)=y$' .config || true
-              exit 1
-          fi
+          grep -q '^CONFIG_PACKAGE_luci-app-uugamebooster=y$' .config
+          grep -q '^CONFIG_PACKAGE_uugamebooster=y$' .config
 
-          test ! -e package/doornet2/luci-app-uugamebooster
 
           test -x files/usr/bin/doornet2-app-updater
           sh -n files/usr/bin/doornet2-app-updater
@@ -7132,15 +7152,11 @@ jobs:
             .config \
             | head -40
 
-          if find ./bin -type f \
-               \( -name 'luci-app-uugamebooster_*.ipk' -o -name 'uugamebooster_*.ipk' \) \
-               -print | grep -q .; then
-              echo "ERROR: UU package artifact was generated in no-UU profile."
-              find ./bin -type f \
-                \( -name 'luci-app-uugamebooster_*.ipk' -o -name 'uugamebooster_*.ipk' \) \
-                -print
-              exit 1
-          fi
+          test -n "$(find ./bin -type f -name 'luci-app-uugamebooster_*.ipk' -print -quit)"
+          test -n "$(find ./bin -type f -name 'uugamebooster_*.ipk' -print -quit)"
+          find ./bin -type f \
+            \( -name 'luci-app-uugamebooster_*.ipk' -o -name 'uugamebooster_*.ipk' \) \
+            -print | head -20
 
           echo
           echo "===== V5.3.5 FINAL ARGON + BOOTSTRAP FALLBACK ====="
@@ -7232,13 +7248,12 @@ jobs:
           grep -B2 -A2 'name: anti-AD' files/etc/adguardhome.yaml | grep -q 'enabled: false'
           grep -A2 'name: anti-AD' files/etc/adguardhome.yaml | grep -q 'id: 900001'
 
-          echo "===== FINAL NO-UU GUARD ====="
-          test ! -e package/doornet2/luci-app-uugamebooster
+          echo "===== FINAL UU PRESERVE GUARD ====="
           test ! -e files/usr/bin/doornet2-uu
           test ! -e files/etc/init.d/uu-delay
-          test -x files/etc/uci-defaults/92-doornet2-remove-uu
-          ! grep -q '^CONFIG_PACKAGE_luci-app-uugamebooster=y$' .config
-          ! grep -q '^CONFIG_PACKAGE_uugamebooster=y$' .config
+          test ! -e files/etc/uci-defaults/92-doornet2-remove-uu
+          grep -q '^CONFIG_PACKAGE_luci-app-uugamebooster=y$' .config
+          grep -q '^CONFIG_PACKAGE_uugamebooster=y$' .config
 
           grep -Fxq 'nameserver /x.com/proxy-test' files/etc/smartdns/custom.conf
           grep -Fxq 'nameserver /x.com/proxy-test' files/etc/smartdns/custom.conf
@@ -7293,7 +7308,9 @@ jobs:
 
           grep -q '^/etc/adguardhome.yaml$' files/etc/sysupgrade.conf
           grep -q '^/etc/config/passwall$' files/etc/sysupgrade.conf
-          ! grep -q '^/etc/config/uuplugin$' files/etc/sysupgrade.conf
+          grep -q '^/etc/config/uuplugin$' files/etc/sysupgrade.conf
+          grep -q '^/etc/config/uugamebooster$' files/etc/sysupgrade.conf
+          grep -q '^/usr/share/uugamebooster/uu.conf$' files/etc/sysupgrade.conf
 
           test -x files/usr/bin/doornet2-heal
           test -x files/usr/bin/doornet2-dns-postpasswall
@@ -7338,5 +7355,5 @@ jobs:
           grep -q 'retained credentials were found'             files/etc/uci-defaults/96-doornet2-wan
           grep -q "DOORNET2_WAN_POLICY='preserve-existing-proto-and-pppoe-creds-v2'"             files/etc/doornet2_release
 
-          echo "R4 V5.3.5 FINAL SOLIDIFIED + NO-UU + ADGUARD10779 + DNS FAILOVER + ADAPTIVE WAN6 READY"
+          echo "R4 V5.3.5 FINAL SOLIDIFIED + UU-PRESERVE + ADGUARD10779 + DNS FAILOVER + ADAPTIVE WAN6 READY"
           echo "========================================"
