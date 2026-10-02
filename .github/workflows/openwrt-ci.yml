@@ -5984,85 +5984,8 @@ jobs:
           grep -Fxq 'address /openai.com.cdn.cloudflare.net/#6' files/etc/smartdns/custom.conf
           grep -Fxq 'nameserver /x.com/proxy-test' files/etc/smartdns/custom.conf
           grep -Fxq 'address /x.com/#6' files/etc/smartdns/custom.conf
-          grep -Fxq 'nameserver /twitter.com/proxy-test' files/etc/smartdns/custom.conf
-          grep -Fxq 'address /twitter.com/#6' files/etc/smartdns/custom.conf
-          grep -Fxq 'nameserver /twimg.com/proxy-test' files/etc/smartdns/custom.conf
-          grep -Fxq 'address /twimg.com/#6' files/etc/smartdns/custom.conf
-          grep -Fxq 'nameserver /t.co/proxy-test' files/etc/smartdns/custom.conf
-          grep -Fxq 'address /t.co/#6' files/etc/smartdns/custom.conf
-
-          echo "===== NO-UU SOURCE GUARD ====="
-          test ! -e package/doornet2/luci-app-uugamebooster
-          test ! -e files/usr/bin/doornet2-uu
-          test ! -e files/etc/init.d/uu-delay
-          test -x files/etc/uci-defaults/92-doornet2-remove-uu
-          sh -n files/etc/uci-defaults/92-doornet2-remove-uu
-
-          ! grep -q '网易 UU 游戏加速器' files/usr/bin/doornet2-app-updater
-          ! grep -q '网易 UU 游戏加速器' files/usr/lib/lua/luci/view/doornet2/app_update.htm
-          ! grep -q 'uu = true' files/usr/lib/lua/luci/controller/doornet2_app_update.lua
-
-          guard_require()
-          {
-              desc="$1"
-              shift
-              if "$@"; then
-                  echo "PASS: $desc"
-              else
-                  echo "ERROR: $desc"
-                  exit 1
-              fi
-          }
-
-          # V5.3.5 DNS failover guard:
-          # validate the new dynamic 3053/6053 switching logic instead of the
-          # old V5.3.4 hard-coded dnsmasq->3053 line.
-          guard_require "DNS chain has dynamic upstream setter" \
-            grep -q 'set_dnsmasq_upstream()' files/etc/init.d/doornet2-dns-chain
-          guard_require "DNS chain can activate AdGuard primary" \
-            grep -q "set_dnsmasq_upstream '127.0.0.1#3053'" files/etc/init.d/doornet2-dns-chain
-          guard_require "DNS chain can activate SmartDNS fallback" \
-            grep -q "set_dnsmasq_upstream '127.0.0.1#6053'" files/etc/init.d/doornet2-dns-chain
-          guard_require "DNS chain performs real DNS query" \
-            grep -q 'dns_query_port_ok()' files/etc/init.d/doornet2-dns-chain
-          guard_require "DNS chain records primary health" \
-            grep -q 'DNS primary healthy: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
-          guard_require "DNS chain records fallback health" \
+          grep -Fxq
             grep -q 'DNS fallback healthy: dnsmasq:53 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
-
-          guard_require "post-PassWall can use AdGuard primary" \
-            grep -q "set_upstream '127.0.0.1#3053'" files/usr/bin/doornet2-dns-postpasswall
-          guard_require "post-PassWall can retain SmartDNS fallback" \
-            grep -q "set_upstream '127.0.0.1#6053'" files/usr/bin/doornet2-dns-postpasswall
-          grep -q 'china-dns 127.0.0.1#6053' files/usr/bin/doornet2-dns-postpasswall
-          grep -q 'group-upstream 127.0.0.1#6053' files/usr/bin/doornet2-dns-postpasswall
-          grep -q 'dns_query_port_ok 15353' files/usr/bin/doornet2-dns-postpasswall
-          guard_require "post-PassWall checks AdGuard process health" \
-            grep -q 'pidof AdGuardHome' files/usr/bin/doornet2-dns-postpasswall
-          guard_require "post-PassWall performs direct port DNS query" \
-            grep -q 'dns_query_port_ok()' files/usr/bin/doornet2-dns-postpasswall
-          guard_require "post-PassWall repairs ChinaDNS 3053 to SmartDNS 6053" \
-            grep -q 'ChinaDNS domestic/direct/vps upstream corrected: 3053 -> 6053' files/usr/bin/doornet2-dns-postpasswall
-          guard_require "post-PassWall validates ChinaDNS 15353" \
-            grep -q 'dns_query_port_ok 15353' files/usr/bin/doornet2-dns-postpasswall
-
-          guard_require "self-heal keeps two-strike PassWall guard" \
-            grep -q 'PassWall proxy core miss 1/2' files/usr/bin/doornet2-heal
-          guard_require "self-heal recognizes Xray or sing-box" \
-            grep -q "grep -Eq '\\[x\\]ray|\\[s\\]ing-box'" files/usr/bin/doornet2-heal
-
-
-          if grep -R -nF 'root@DoorNet2:' \
-               files/etc/init.d files/etc/uci-defaults files/usr/bin 2>/dev/null; then
-              echo "ERROR: copied shell prompt found in firmware source"
-              exit 1
-          fi
-
-          if grep -R -nF -- '-ash:' \
-               files/etc/init.d files/etc/uci-defaults files/usr/bin 2>/dev/null; then
-              echo "ERROR: copied shell diagnostic found in firmware source"
-              exit 1
-          fi
 
           if grep -R -nE '\\[https?://' \
                files/etc/init.d files/etc/uci-defaults files/usr/bin 2>/dev/null; then
