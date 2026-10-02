@@ -1189,10 +1189,11 @@ jobs:
                 >/dev/null 2>&1
           }
 
-          dns_query_ok()
+          dns_query_port_ok()
           {
-              nslookup www.baidu.com 127.0.0.1 >/dev/null 2>&1 || \
-              nslookup www.qq.com 127.0.0.1 >/dev/null 2>&1
+              port="$1"
+              nslookup -port="$port" www.baidu.com 127.0.0.1 >/dev/null 2>&1 || \
+              nslookup -port="$port" www.qq.com 127.0.0.1 >/dev/null 2>&1
           }
 
           set_dnsmasq_upstream()
@@ -1222,7 +1223,9 @@ jobs:
 
               i=0
               while [ "$i" -lt 45 ]; do
-                  port_ready 6053 && return 0
+                  if port_ready 6053 && dns_query_port_ok 6053; then
+                      return 0
+                  fi
                   sleep 1
                   i=$((i + 1))
               done
@@ -1231,35 +1234,33 @@ jobs:
 
           activate_fallback()
           {
+              # PassWall ChinaDNS-NG is internal-only.  Client DNS must not
+              # depend on its 11400/15353 chain, so keep global DNS redirect
+              # disabled for future PassWall restarts.
               if uci -q get passwall.@global[0] >/dev/null 2>&1; then
                   uci -q set passwall.@global[0].dns_redirect='0'
                   uci -q commit passwall
               fi
 
-              set_dnsmasq_upstream '127.0.0.1#6053'
-              if dns_query_ok; then
-                  log_msg "DNS fallback healthy: dnsmasq:53 -> SmartDNS:6053"
-                  return 0
+              if ! dns_query_port_ok 6053; then
+                  log_msg "ERROR: SmartDNS :6053 direct query failed"
+                  return 1
               fi
 
-              log_msg "ERROR: SmartDNS fallback query failed"
-              return 1
+              set_dnsmasq_upstream '127.0.0.1#6053'
+              log_msg "DNS fallback healthy: dnsmasq:53 -> SmartDNS:6053"
+              return 0
           }
 
           try_activate_adguard()
           {
               pidof AdGuardHome >/dev/null 2>&1 || return 1
               port_ready 3053 || return 1
+              dns_query_port_ok 3053 || return 1
 
               set_dnsmasq_upstream '127.0.0.1#3053'
-              if dns_query_ok; then
-                  log_msg "DNS primary healthy: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053"
-                  return 0
-              fi
-
-              log_msg "WARN: AdGuard port exists but DNS query failed; reverting to SmartDNS fallback"
-              activate_fallback >/dev/null 2>&1 || true
-              return 1
+              log_msg "DNS primary healthy: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053"
+              return 0
           }
 
           start()
@@ -1269,10 +1270,10 @@ jobs:
                   log_msg "R4 V5.3.5 DNS failover coordinator started"
 
                   if ! prepare_smartdns; then
-                      log_msg "ERROR: SmartDNS :6053 not ready; leaving existing dnsmasq config unchanged"
+                      log_msg "ERROR: SmartDNS :6053 not ready/queryable; leaving existing dnsmasq config unchanged"
                       exit 0
                   fi
-                  log_msg "SmartDNS :6053 ready"
+                  log_msg "SmartDNS :6053 ready and queryable"
 
                   # Always establish the safe path first.  This makes retained
                   # online upgrades survivable even when AdGuard's preserved
@@ -1330,6 +1331,7 @@ jobs:
 
           LOG='/tmp/doornet2-dns-chain.log'
           PW_DNSMASQ='/tmp/dnsmasq.d/dnsmasq-passwall.conf'
+          CHINADNS_CFG='/tmp/etc/passwall/acl/default/chinadns_ng.conf'
           CHANGED=0
 
           log_msg()
@@ -1342,10 +1344,11 @@ jobs:
               netstat -lnptu 2>/dev/null | grep -E "[:.]$1[[:space:]]" >/dev/null 2>&1
           }
 
-          dns_query_ok()
+          dns_query_port_ok()
           {
-              nslookup www.baidu.com 127.0.0.1 >/dev/null 2>&1 || \
-              nslookup www.qq.com 127.0.0.1 >/dev/null 2>&1
+              port="$1"
+              nslookup -port="$port" www.baidu.com 127.0.0.1 >/dev/null 2>&1 || \
+              nslookup -port="$port" www.qq.com 127.0.0.1 >/dev/null 2>&1
           }
 
           set_upstream()
@@ -1364,6 +1367,55 @@ jobs:
               fi
           }
 
+          restart_chinadns_only()
+          {
+              [ -x /tmp/etc/passwall/bin/chinadns-ng ] || return 1
+              [ -s "$CHINADNS_CFG" ] || return 1
+
+              killall chinadns-ng >/dev/null 2>&1 || true
+              sleep 1
+              /tmp/etc/passwall/bin/chinadns-ng -C "$CHINADNS_CFG" \
+                >/tmp/chinadns-ng-doornet2.log 2>&1 &
+              sleep 2
+              pidof chinadns-ng >/dev/null 2>&1
+          }
+
+          fix_passwall_chinadns_upstream()
+          {
+              [ -s "$CHINADNS_CFG" ] || return 0
+
+              # Real-device V5.3.4 diagnosis proved that a dead AdGuard :3053
+              # here makes domestic/direct DNS stall for 5 seconds while the
+              # proxy trust DNS still works.  ChinaDNS-NG is PassWall-internal,
+              # so its local domestic/direct/vps upstream is deliberately
+              # independent of AdGuard and always uses SmartDNS :6053.
+              if ! dns_query_port_ok 6053; then
+                  log_msg "ERROR: SmartDNS :6053 failed; ChinaDNS upstream left unchanged"
+                  return 1
+              fi
+
+              before="$(grep -E '^(china-dns|group-upstream)[[:space:]]+127\.0\.0\.1#(3053|6053)[[:space:]]*$' "$CHINADNS_CFG" 2>/dev/null)"
+
+              sed -i \
+                -e 's|^china-dns 127\.0\.0\.1#3053$|china-dns 127.0.0.1#6053|' \
+                -e 's|^group-upstream 127\.0\.0\.1#3053$|group-upstream 127.0.0.1#6053|' \
+                "$CHINADNS_CFG"
+
+              after="$(grep -E '^(china-dns|group-upstream)[[:space:]]+127\.0\.0\.1#(3053|6053)[[:space:]]*$' "$CHINADNS_CFG" 2>/dev/null)"
+
+              if [ "$before" != "$after" ]; then
+                  log_msg "ChinaDNS domestic/direct/vps upstream corrected: 3053 -> 6053"
+                  restart_chinadns_only || log_msg "ERROR: ChinaDNS-NG restart failed after upstream correction"
+                  CHANGED=1
+              fi
+
+              if pidof chinadns-ng >/dev/null 2>&1 && dns_query_port_ok 15353; then
+                  log_msg "ChinaDNS-NG :15353 domestic query healthy via SmartDNS :6053"
+              else
+                  log_msg "ERROR: ChinaDNS-NG :15353 domestic query failed"
+              fi
+          }
+
           # ChinaDNS-NG remains PassWall-internal only.
           if [ -f "$PW_DNSMASQ" ] && \
              grep -Eq '^(server=127\.0\.0\.1#15353|all-servers|no-poll|no-resolv)[[:space:]]*$' "$PW_DNSMASQ"
@@ -1373,25 +1425,27 @@ jobs:
               CHANGED=1
           fi
 
-          # Never force 3053 merely because PassWall restarted.  AdGuard must
-          # have a live process and listening port first; the end-to-end query
-          # below decides whether the primary path is actually usable.
-          if pidof AdGuardHome >/dev/null 2>&1 && port_ready 3053; then
+          # Repair the actual PassWall internal DNS chain first.  This runs
+          # after every PassWall start/restart and prevents regenerated 3053
+          # references from reintroducing the V5.3.4 five-second timeout.
+          fix_passwall_chinadns_upstream || true
+
+          # Main client DNS may use AdGuard only when :3053 answers real DNS
+          # queries.  Otherwise retain the verified SmartDNS fallback.
+          if pidof AdGuardHome >/dev/null 2>&1 && \
+             port_ready 3053 && dns_query_port_ok 3053; then
               set_upstream '127.0.0.1#3053'
-              if dns_query_ok; then
-                  log_msg "AdGuard primary DNS confirmed"
-              else
-                  log_msg "AdGuard primary DNS query failed; reverting to SmartDNS :6053"
-                  set_upstream '127.0.0.1#6053'
-                  dns_query_ok || log_msg "ERROR: SmartDNS fallback query also failed"
-              fi
+              log_msg "AdGuard primary DNS confirmed by direct :3053 query"
           else
               set_upstream '127.0.0.1#6053'
-              dns_query_ok || log_msg "ERROR: SmartDNS fallback query failed"
-              log_msg "AdGuard not healthy; SmartDNS fallback retained"
+              if dns_query_port_ok 6053; then
+                  log_msg "AdGuard not healthy; SmartDNS :6053 fallback retained"
+              else
+                  log_msg "ERROR: SmartDNS fallback query failed"
+              fi
           fi
 
-          [ "$CHANGED" = '1' ] && log_msg "dnsmasq policy corrected after PassWall event"
+          [ "$CHANGED" = '1' ] && log_msg "DNS policy corrected after PassWall event"
           exit 0
           EOF
 
@@ -2759,7 +2813,7 @@ jobs:
           DOORNET2_PASSWALL='builtin-online-feed-shunt-v2'
           DOORNET2_NETWORK_APPS='smartdns-adguard-persist-online-v6'
           DOORNET2_SHUNT='preset-rules-tencent-direct-login-safe-v5'
-          DOORNET2_DNS_CHAIN='adguard-smartdns-postpasswall-v4'
+          DOORNET2_DNS_CHAIN='adguard-smartdns-postpasswall-v5'
           DOORNET2_ADGUARD_RUNTIME='official-v0.107.79-arm64-sha256-v1'
           DOORNET2_PASSWALL_DELAY='route-aware-proxy-aware-v2'
           DOORNET2_HEALTH='selfcheck-selfheal-v3'
@@ -2770,7 +2824,7 @@ jobs:
           DOORNET2_WAN_POLICY='preserve-existing-proto-and-pppoe-creds-v2'
           DOORNET2_SELFHEAL='service-aware-two-strike-v2'
           DOORNET2_ROOT_AUTH='preserve-user-password-no-known-default-v1'
-          DOORNET2_DNS_POSTPASSWALL='main-dns-guard-v1'
+          DOORNET2_DNS_POSTPASSWALL='chinadns-smartdns-guard-v2'
           DOORNET2_SMARTDNS_OPENAI='proxytest-ipv4only-reboot-validated-v1'
           EOF
 
@@ -5970,7 +6024,7 @@ jobs:
           guard_require "DNS chain can activate SmartDNS fallback" \
             grep -q "set_dnsmasq_upstream '127.0.0.1#6053'" files/etc/init.d/doornet2-dns-chain
           guard_require "DNS chain performs real DNS query" \
-            grep -q 'dns_query_ok()' files/etc/init.d/doornet2-dns-chain
+            grep -q 'dns_query_port_ok()' files/etc/init.d/doornet2-dns-chain
           guard_require "DNS chain records primary health" \
             grep -q 'DNS primary healthy: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
           guard_require "DNS chain records fallback health" \
@@ -5980,10 +6034,17 @@ jobs:
             grep -q "set_upstream '127.0.0.1#3053'" files/usr/bin/doornet2-dns-postpasswall
           guard_require "post-PassWall can retain SmartDNS fallback" \
             grep -q "set_upstream '127.0.0.1#6053'" files/usr/bin/doornet2-dns-postpasswall
+          grep -q 'china-dns 127.0.0.1#6053' files/usr/bin/doornet2-dns-postpasswall
+          grep -q 'group-upstream 127.0.0.1#6053' files/usr/bin/doornet2-dns-postpasswall
+          grep -q 'dns_query_port_ok 15353' files/usr/bin/doornet2-dns-postpasswall
           guard_require "post-PassWall checks AdGuard process health" \
             grep -q 'pidof AdGuardHome' files/usr/bin/doornet2-dns-postpasswall
-          guard_require "post-PassWall performs end-to-end DNS query" \
-            grep -q 'dns_query_ok()' files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall performs direct port DNS query" \
+            grep -q 'dns_query_port_ok()' files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall repairs ChinaDNS 3053 to SmartDNS 6053" \
+            grep -q 'ChinaDNS domestic/direct/vps upstream corrected: 3053 -> 6053' files/usr/bin/doornet2-dns-postpasswall
+          guard_require "post-PassWall validates ChinaDNS 15353" \
+            grep -q 'dns_query_port_ok 15353' files/usr/bin/doornet2-dns-postpasswall
 
           guard_require "self-heal keeps two-strike PassWall guard" \
             grep -q 'PassWall proxy core miss 1/2' files/usr/bin/doornet2-heal
@@ -6418,11 +6479,11 @@ jobs:
             "self_heal": "service-aware-two-strike-v2",
             "root_auth": "preserve-user-password-no-known-default-v1",
             "shunt_presets": "preset-rules-tencent-direct-login-safe-v5",
-            "dns_chain": "adguard-smartdns-postpasswall-v4",
+            "dns_chain": "adguard-smartdns-postpasswall-v5",
             "adguard_runtime": "official-v0.107.79-arm64-sha256-v1",
             "passwall_delay": "route-aware-proxy-aware-v2",
             "health_check": "selfcheck-selfheal-v3",
-            "dns_postpasswall": "main-dns-guard-v1",
+            "dns_postpasswall": "chinadns-smartdns-guard-v2",
             "smartdns_openai": "proxytest-ipv4only-reboot-validated-v1",
             "profile": "stable-final-v5.3.5-solidified-nouu-dnsfailover-adguard10779-dualstack-proxyv4-slim-argon181",
             "release": "R4"
@@ -7280,11 +7341,14 @@ jobs:
           grep -q "dhcp.lan.dhcpv6='server'" files/etc/uci-defaults/93-doornet2-dualstack-proxyv4
           grep -q "filter_proxy_ipv6='1'" files/etc/uci-defaults/96-doornet2-passwall-shunt
           grep -q "ipv6_tproxy='0'" files/etc/uci-defaults/96-doornet2-passwall-shunt
-          grep -q 'SmartDNS :6053 ready' files/etc/init.d/doornet2-dns-chain
+          grep -q 'SmartDNS :6053 ready and queryable' files/etc/init.d/doornet2-dns-chain
           grep -q 'DNS fallback healthy: dnsmasq:53 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
           grep -q 'DNS primary healthy: dnsmasq:53 -> AdGuard:3053 -> SmartDNS:6053' files/etc/init.d/doornet2-dns-chain
           grep -q 'while \[ "$attempt" -le 3 \]' files/etc/init.d/doornet2-dns-chain
           grep -q "set_upstream '127.0.0.1#6053'" files/usr/bin/doornet2-dns-postpasswall
+          grep -q 'china-dns 127.0.0.1#6053' files/usr/bin/doornet2-dns-postpasswall
+          grep -q 'group-upstream 127.0.0.1#6053' files/usr/bin/doornet2-dns-postpasswall
+          grep -q 'dns_query_port_ok 15353' files/usr/bin/doornet2-dns-postpasswall
           test -s files/usr/bin/AdGuardHome
           test -s files/etc/doornet2_adguard_runtime
           grep -q "ADGUARD_VERSION='v0.107.79'" files/etc/doornet2_adguard_runtime
