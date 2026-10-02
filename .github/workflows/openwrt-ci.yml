@@ -5124,7 +5124,6 @@ jobs:
                       FILTER='^(smartdns|smartdns-ui|luci-app-smartdns|luci-i18n-smartdns-.*)$'
                       ;;
                   adguard)
-                  adguard)
                       LABEL='AdGuard Home'
                       MAIN='adguardhome'
                       SERVICE='adguardhome'
