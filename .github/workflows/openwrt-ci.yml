@@ -1,4 +1,4 @@
-name: DoorNet2-OpenWrt-iStore-R4-V5.3.5-Final-OnlineUpgrade-NoUU-DNSFailover-AdGuard10779
+name: DoorNet2 V5.3.5 Build
 
 on:
   workflow_dispatch:
