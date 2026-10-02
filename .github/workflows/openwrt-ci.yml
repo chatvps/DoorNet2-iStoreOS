@@ -125,4 +125,4 @@ jobs:
           # Upstream LEDE ships a uci-defaults hook that resets root to the
           # well-known password "password". DoorNet2 must preserve the
           # user's existing root credential instead.
-          mapfile -t ROOTPW_FILES < <(
+          ROOTPW_FILES="$(grep -RIl --fixed-strings 'V4UetPzk' package 2>/dev/null || true)"
