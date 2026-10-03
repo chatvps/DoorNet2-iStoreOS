@@ -121,9 +121,6 @@ jobs:
         with:
           path: |
             dl
-            build_dir
-            staging_dir
-            tmp
             .ccache
           key: openwrt-rk3399-${{ hashFiles('.config') }}-${{ github.sha }}
           restore-keys: |
