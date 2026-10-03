@@ -6505,6 +6505,20 @@ jobs:
           path: ./artifact/package/
           retention-days: 30
 
+
+      - name: Rename DoorNet2 firmware for online upgrade
+        run: |
+          mkdir -p artifact/release
+
+          cp bin/targets/rockchip/armv8/*embedfire_doornet2-ext4-sysupgrade.img.gz \
+          artifact/release/DoorNet2-ext4-sysupgrade.img.gz
+
+          sha256sum artifact/release/DoorNet2-ext4-sysupgrade.img.gz \
+          > artifact/release/SHA256SUMS
+
+          echo "===== Online upgrade firmware ====="
+          ls -lh artifact/release
+
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
