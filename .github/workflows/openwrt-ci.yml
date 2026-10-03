@@ -6514,7 +6514,7 @@ jobs:
           artifact/release/DoorNet2-ext4-sysupgrade.img.gz
 
           sha256sum artifact/release/DoorNet2-ext4-sysupgrade.img.gz \
-          > artifact/release/SHA256SUMS
+          > artifact/release/sha256sums.txt
 
           echo "===== Online upgrade firmware ====="
           ls -lh artifact/release
