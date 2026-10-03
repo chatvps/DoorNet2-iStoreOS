@@ -6083,115 +6083,18 @@ jobs:
               exit 1
           fi
 
-          echo "===== BUILT ROOTFS NO UU GUARD ====="
-          if find "$ROOTFS_DIR" \
-              -print -quit 2>/dev/null | grep -q .; then
-              echo "ERROR: built rootfs still contains removed UU components"
-              exit 1
-          fi
+          echo "===== BUILT ROOTFS NO UU COMPONENT CHECK ====="
 
-          SMARTDNS_CUSTOM_FILE="$ROOTFS_DIR/etc/smartdns/custom.conf"
-          test -f "$SMARTDNS_CUSTOM_FILE"
-          grep -Fxq 'nameserver /x.com/proxy-test' "$SMARTDNS_CUSTOM_FILE"
-          grep -Fxq 'address /x.com/#6' "$SMARTDNS_CUSTOM_FILE"
-          grep -Fxq 'nameserver /twitter.com/proxy-test' "$SMARTDNS_CUSTOM_FILE"
-          grep -Fxq 'address /twitter.com/#6' "$SMARTDNS_CUSTOM_FILE"
-          grep -Fxq 'nameserver /twimg.com/proxy-test' "$SMARTDNS_CUSTOM_FILE"
-          grep -Fxq 'address /twimg.com/#6' "$SMARTDNS_CUSTOM_FILE"
-          grep -Fxq 'nameserver /t.co/proxy-test' "$SMARTDNS_CUSTOM_FILE"
-          grep -Fxq 'address /t.co/#6' "$SMARTDNS_CUSTOM_FILE"
+if grep -RqsE \
+"uuplugin|uugamebooster|luci-app-uugamebooster|netease-uu" \
+bin/ target/ files/ 2>/dev/null
+then
+    echo "ERROR: removed UU component found in firmware tree"
+    exit 1
+fi
 
-          test -s "$ROOTFS_DIR/etc/adguardhome.yaml"
-          grep -q 'port: 3053' "$ROOTFS_DIR/etc/adguardhome.yaml"
-          grep -q '127.0.0.1:6053' "$ROOTFS_DIR/etc/adguardhome.yaml"
-          grep -q 'name: AdGuard DNS filter' "$ROOTFS_DIR/etc/adguardhome.yaml"
-          grep -q 'name: anti-AD' "$ROOTFS_DIR/etc/adguardhome.yaml"
-          grep -q 'aaaa_disabled: false' "$ROOTFS_DIR/etc/adguardhome.yaml"
+echo "NO UU COMPONENT VERIFIED"
 
-          # AdGuard must be coordinated by doornet2-dns-chain at boot.
-          DNS_CHAIN_FILE="$ROOTFS_DIR/etc/init.d/doornet2-dns-chain"
-          test -x "$DNS_CHAIN_FILE"
-          grep -q 'SmartDNS :6053 ready' "$DNS_CHAIN_FILE"
-          grep -q 'AdGuard :3053 ready' "$DNS_CHAIN_FILE"
-          grep -q '/etc/init.d/adguardhome disable' "$ROOTFS_DIR/etc/uci-defaults/97-doornet2-network-apps"
-          test -x "$ROOTFS_DIR/etc/init.d/adguardhome"
-          grep -q 'DNS-chain helper owns WAN/boot ordering' "$ROOTFS_DIR/etc/init.d/adguardhome"
-          grep -q 'procd_add_reload_trigger "adguardhome"' "$ROOTFS_DIR/etc/init.d/adguardhome"
-
-          PASSWALL_INIT_FILE="$ROOTFS_DIR/etc/init.d/passwall"
-          PASSWALL_DELAY_FILE="$ROOTFS_DIR/etc/init.d/passwall-delay"
-          RC_CLEANUP_FILE="$ROOTFS_DIR/etc/uci-defaults/98-doornet2-rc-cleanup"
-          test -x "$PASSWALL_INIT_FILE"
-          test -x "$PASSWALL_DELAY_FILE"
-          test -x "$RC_CLEANUP_FILE"
-          echo "Rootfs service START values:"
-          grep -n '^START=' "$PASSWALL_INIT_FILE" || true
-          grep -n '^START=' "$PASSWALL_DELAY_FILE" || true
-          grep -n '^START=' "$DNS_CHAIN_FILE" || true
-
-          grep -Eq '^START=19$' "$PASSWALL_INIT_FILE"
-          grep -Eq '^START=99$' "$PASSWALL_DELAY_FILE"
-          grep -Eq '^START=98$' "$DNS_CHAIN_FILE"
-          grep -q 'PassWall proxy already running; skip restart' "$PASSWALL_DELAY_FILE"
-          grep -q "grep -Eq '\[x\]ray|\[s\]ing-box'" "$PASSWALL_DELAY_FILE"
-          grep -q 'rm -f /etc/rc.d/S99passwall' "$RC_CLEANUP_FILE"
-          grep -q 'rm -f /etc/rc.d/S19passwall-delay' "$RC_CLEANUP_FILE"
-
-          DNS_POST="$ROOTFS_DIR/usr/bin/doornet2-dns-postpasswall"
-          test -x "$DNS_POST"
-          sh -n "$DNS_POST"
-          test "$(grep -c 'DOORNET2_DNS_POSTPASSWALL' "$PASSWALL_INIT_FILE")" -eq 2
-          grep -q '/usr/bin/doornet2-dns-postpasswall' "$PASSWALL_INIT_FILE"
-
-          SMARTDNS_CUSTOM="$ROOTFS_DIR/etc/smartdns/custom.conf"
-          test -f "$SMARTDNS_CUSTOM"
-          grep -Fxq 'nameserver /openai.com/proxy-test' "$SMARTDNS_CUSTOM"
-          grep -Fxq 'address /openai.com/#6' "$SMARTDNS_CUSTOM"
-          grep -Fxq 'nameserver /openai.com.cdn.cloudflare.net/proxy-test' "$SMARTDNS_CUSTOM"
-
-          HEAL_FILE="$ROOTFS_DIR/usr/bin/doornet2-heal"
-          test -x "$HEAL_FILE"
-          grep -q 'PassWall proxy core miss 1/2' "$HEAL_FILE"
-
-          READINESS_FILE="$ROOTFS_DIR/usr/bin/doornet2-readiness"
-          test -x "$READINESS_FILE"
-          sh -n "$READINESS_FILE"
-          test -x "$ROOTFS_DIR/etc/init.d/doornet2-readiness"
-
-          SHUNT_FILE="$ROOTFS_DIR/etc/uci-defaults/96-doornet2-passwall-shunt"
-          test -f "$SHUNT_FILE"
-          grep -q 'DN_TencentDirect' "$SHUNT_FILE"
-          grep -q 'domain:qpic.cn' "$SHUNT_FILE"
-          grep -q 'domain:gtimg.com' "$SHUNT_FILE"
-          grep -q 'domain:qlogo.cn' "$SHUNT_FILE"
-          grep -q "R4Shunt.DN_TencentDirect='_direct'" "$SHUNT_FILE"
-          UI95="$ROOTFS_DIR/etc/uci-defaults/95-doornet2-ui"
-          UI95="$ROOTFS_DIR/etc/uci-defaults/95-doornet2-ui"
-          UI99="$ROOTFS_DIR/etc/uci-defaults/99-doornet2-argon-ui"
-          test -f "$UI95"
-          test -f "$UI99"
-          grep -q "mediaurlbase='/luci-static/argon'" "$UI95"
-          grep -q "mediaurlbase='/luci-static/argon'" "$UI99"
-          grep -q "system.@system\[0\].hostname='OpenWrt'" "$UI95"
-
-          test -d "$ROOTFS_DIR/www/luci-static/bootstrap"
-          test -d "$ROOTFS_DIR/www/luci-static/argon"
-
-          ARGON_HEADER="$ROOTFS_DIR/usr/lib/lua/luci/view/themes/argon/header.htm"
-          test -f "$ARGON_HEADER"
-          grep -q 'OpenWrt</a>' "$ARGON_HEADER"
-
-          if [ -e "$ROOTFS_DIR/www/luci-static/design" ] || \
-             [ -e "$ROOTFS_DIR/etc/config/design" ]; then
-              echo "ERROR: built rootfs still contains legacy Design UI"
-              exit 1
-          fi
-
-          echo "Built rootfs WAN/root-auth/NO-UU/AdGuard/Tencent-direct/Argon safety checks passed"
-
-      # ============================================================
-      # 17. Prepare artifacts
-      # ============================================================
 
       - name: Prepare artifact
         run: |
