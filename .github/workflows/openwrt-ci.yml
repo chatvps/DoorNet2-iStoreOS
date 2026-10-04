@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build_openwrt:
-    name: Build DoorNet2 OpenWrt Firmware
+    name: Build DoorNet2 RK3399 OpenWrt
     runs-on: ubuntu-22.04
 
     steps:
@@ -18,69 +18,51 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential clang flex bison gawk gettext \
-            git libncurses-dev libssl-dev python3 rsync unzip wget zstd
+          sudo apt-get install -y build-essential clang flex bison gawk gettext git libncurses-dev libssl-dev python3 rsync unzip wget zstd
 
-      - name: Fix Linux executable permissions
+      - name: Fix executable permissions
         run: |
           chmod +x ./scripts/* || true
-
-          find . -type f \( \
-            -name "*.sh" -o \
-            -name "*.pl" -o \
-            -name "*.py" \
-          \) -exec chmod +x {} \; || true
-
-          chmod +x ./scripts/feeds || true
-          chmod +x ./scripts/config.guess || true
-          chmod +x ./scripts/package-metadata.pl || true
-          chmod +x ./scripts/command_all.sh || true
-          chmod +x ./scripts/getver.sh || true
-          chmod +x ./scripts/get_source_date_epoch.sh || true
+          find . -type f \( -name "*.sh" -o -name "*.pl" -o -name "*.py" \) -exec chmod +x {} \; || true
 
       - name: Add feeds
         run: |
           set -e
-
-          grep -q '^src-git istore ' feeds.conf.default || \
-            echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
-
-          grep -q '^src-git passwall_packages ' feeds.conf.default || \
-            echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' >> feeds.conf.default
-
-          grep -q '^src-git passwall_luci ' feeds.conf.default || \
-            echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >> feeds.conf.default
+          grep -q '^src-git istore ' feeds.conf.default || echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
+          grep -q '^src-git passwall_packages ' feeds.conf.default || echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' >> feeds.conf.default
+          grep -q '^src-git passwall_luci ' feeds.conf.default || echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >> feeds.conf.default
 
       - name: Update feeds
         run: |
-          set -e
           chmod +x ./scripts/feeds
-
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
-
           ./scripts/feeds install -f -p istore luci-app-store || true
           ./scripts/feeds install -f -p passwall_luci luci-app-passwall || true
           ./scripts/feeds install -f -p passwall_luci luci-app-passwall2 || true
           ./scripts/feeds install -f -p packages smartdns adguardhome || true
           ./scripts/feeds install -f -p luci luci-app-smartdns || true
 
-      - name: Final permission fix
+      - name: Load DoorNet2 config
         run: |
-          find . -type f \( -name "*.sh" -o -name "*.pl" \) -exec chmod +x {} \; || true
+          if [ -f config/doorNet2.config ]; then
+            cp config/doorNet2.config .config
+          elif [ -f config/doornet2.config ]; then
+            cp config/doornet2.config .config
+          else
+            echo "DoorNet2 config not found"
+            exit 1
+          fi
+          make defconfig
 
       - name: Build firmware
         run: |
-          make defconfig
           make -j$(nproc) || make -j1 V=s
 
       - name: Collect firmware
         run: |
           mkdir -p release
-          find bin/targets -type f \
-            \( -name '*.img*' -o -name '*.bin' -o -name '*.gz' \) \
-            -exec cp {} release/ \; || true
+          find bin/targets -type f \( -name '*.img*' -o -name '*.bin' -o -name '*.gz' \) -exec cp {} release/ \; || true
 
       - name: Upload firmware
         uses: actions/upload-artifact@v4
