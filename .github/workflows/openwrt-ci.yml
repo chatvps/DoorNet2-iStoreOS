@@ -18,18 +18,17 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison gawk gettext git libncurses-dev libssl-dev python3 rsync unzip wget zstd
+          sudo apt-get install -y             build-essential clang flex bison gawk gettext             git libncurses-dev libssl-dev             python3 python3-pip             rsync unzip wget zstd
 
           pip3 install pyelftools
 
-      - name: Fix executable permissions
+      - name: Fix permissions
         run: |
           chmod +x ./scripts/* || true
           find . -type f \( -name "*.sh" -o -name "*.pl" -o -name "*.py" \) -exec chmod +x {} \; || true
 
       - name: Add feeds
         run: |
-          set -e
           grep -q '^src-git istore ' feeds.conf.default || echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
           grep -q '^src-git passwall_packages ' feeds.conf.default || echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' >> feeds.conf.default
           grep -q '^src-git passwall_luci ' feeds.conf.default || echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >> feeds.conf.default
@@ -39,11 +38,15 @@ jobs:
           chmod +x ./scripts/feeds
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
-          ./scripts/feeds install -f -p istore luci-app-store || true
-          ./scripts/feeds install -f -p passwall_luci luci-app-passwall || true
-          ./scripts/feeds install -f -p passwall_luci luci-app-passwall2 || true
-          ./scripts/feeds install -f -p packages smartdns adguardhome || true
-          ./scripts/feeds install -f -p luci luci-app-smartdns || true
+
+      - name: Remove unsupported packages
+        run: |
+          ./scripts/feeds uninstall geoview || true
+          rm -rf feeds/passwall_packages/geoview || true
+
+          # Rust host build is not required for this firmware
+          ./scripts/feeds uninstall rust || true
+          rm -rf feeds/packages/lang/rust || true
 
       - name: Load DoorNet2 config
         run: |
@@ -55,13 +58,8 @@ jobs:
             echo "DoorNet2 config not found"
             exit 1
           fi
+
           make defconfig
-
-
-      - name: Disable PassWall geoview
-        run: |
-          ./scripts/feeds uninstall geoview || true
-          rm -rf feeds/passwall_packages/geoview || true
 
       - name: Build firmware
         run: |
