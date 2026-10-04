@@ -57,6 +57,12 @@ jobs:
           fi
           make defconfig
 
+
+      - name: Disable PassWall geoview
+        run: |
+          ./scripts/feeds uninstall geoview || true
+          rm -rf feeds/passwall_packages/geoview || true
+
       - name: Build firmware
         run: |
           make -j$(nproc) || make -j1 V=s
