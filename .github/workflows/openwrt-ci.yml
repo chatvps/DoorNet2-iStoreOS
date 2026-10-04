@@ -12,18 +12,25 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - name: Checkout
+      - name: Checkout OpenWrt
         uses: actions/checkout@v4
 
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison gawk gettext \
+          sudo apt-get install -y \
+            build-essential clang flex bison gawk gettext \
             git libncurses-dev libssl-dev python3 rsync unzip wget zstd
+
+      - name: Fix script permissions
+        run: |
+          chmod +x ./scripts/feeds
+          chmod +x ./scripts/defconfig.pl || true
 
       - name: Add feeds
         run: |
           set -e
+
           grep -q '^src-git istore ' feeds.conf.default || \
             echo 'src-git istore https://github.com/linkease/istore;main' >> feeds.conf.default
 
@@ -33,8 +40,12 @@ jobs:
           grep -q '^src-git passwall_luci ' feeds.conf.default || \
             echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >> feeds.conf.default
 
-      - name: Update feeds
+      - name: Update and install feeds
         run: |
+          set -e
+
+          chmod +x ./scripts/feeds
+
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
 
@@ -46,9 +57,11 @@ jobs:
 
       - name: Prepare config
         run: |
-          test -f .config || make defconfig
+          if [ ! -f .config ]; then
+            make defconfig
+          fi
 
-      - name: Build
+      - name: Build firmware
         run: |
           make defconfig
           make -j$(nproc) || make -j1 V=s
@@ -56,9 +69,11 @@ jobs:
       - name: Collect firmware
         run: |
           mkdir -p release
-          find bin/targets -type f \\( -name '*.img*' -o -name '*.bin' \\) -exec cp {} release/ \\; || true
+          find bin/targets -type f \
+            \( -name '*.img*' -o -name '*.bin' -o -name '*.gz' \) \
+            -exec cp {} release/ \; || true
 
-      - name: Upload firmware
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
           name: DoorNet2-iStoreOS-firmware
