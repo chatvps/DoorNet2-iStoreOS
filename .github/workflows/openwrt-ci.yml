@@ -20,6 +20,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential clang flex bison gawk gettext git libncurses-dev libssl-dev python3 rsync unzip wget zstd
 
+          pip3 install pyelftools
+
       - name: Fix executable permissions
         run: |
           chmod +x ./scripts/* || true
