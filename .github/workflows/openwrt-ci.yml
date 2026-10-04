@@ -48,6 +48,10 @@ jobs:
           ./scripts/feeds uninstall rust || true
           rm -rf feeds/packages/lang/rust || true
 
+          # Remove shadowsocks-rust dependency which requires rust-package.mk
+          ./scripts/feeds uninstall shadowsocks-rust || true
+          rm -rf feeds/passwall_packages/shadowsocks-rust || true
+
       - name: Load DoorNet2 config
         run: |
           if [ -f config/doorNet2.config ]; then
