@@ -1,0 +1,124 @@
+#!/bin/sh
+
+. /lib/functions/uci-defaults.sh
+. /lib/functions/system.sh
+
+rockchip_setup_interfaces()
+{
+	local board="$1"
+
+	case "$board" in
+	embedfire,doornet1|\
+	embedfire,doornet2|\
+	embedfire,lubancat-1n|\
+	embedfire,lubancat-2|\
+	embedfire,lubancat-5|\
+	hinlink,opc-h66k|\
+	friendlyarm,nanopi-r2c|\
+	friendlyarm,nanopi-r2s|\
+	friendlyelec,nanopi-r3s|\
+	friendlyarm,nanopi-r4s|\
+	friendlyarm,nanopi-r4se|\
+	friendlyarm,nanopi-r5c|\
+	friendlyarm,nanopc-t6|\
+	friendlyarm,nanopi-r6c)
+		ucidef_set_interfaces_lan_wan 'eth1' 'eth0'
+		;;
+	friendlyarm,nanopi-r6s|\
+	friendlyarm,nanopi-r5s)
+		ucidef_set_interfaces_lan_wan "eth1 eth2" "eth0"
+		;;
+	embedfire,lubancat1)
+		ucidef_set_interfaces_lan_wan "eth0" "wwan0"
+		;;
+	hinlink,opc-h68k|\
+	hinlink,opc-h69k|\
+	embedfire,lubancat-2n)
+		ucidef_set_interfaces_lan_wan "eth1 eth2 eth3" "eth0"
+		;;
+	hinlink,h88k)
+		ucidef_set_interfaces_lan_wan "eth1 eth2 eth3 eth4" "eth0"
+		;;
+	*)
+		ucidef_set_interface_lan 'eth0'
+		;;
+	esac
+}
+
+generate_mac_from_mmc_cid()
+{
+	local sd_hash=$(sha256sum /sys/class/block/mmcblk*/device/cid | head -n 1)
+	local mac_base=$(macaddr_canonicalize "$(echo "${sd_hash}" | dd bs=1 count=12 2>/dev/null)")
+	echo "$(macaddr_unsetbit_mc "$(macaddr_setbit_la "${mac_base}")")"
+}
+
+nanopi_r4s_get_mac()
+{
+	local interface=$1
+	local eeprom_path="/sys/bus/i2c/devices/2-0051/eeprom"
+	local address
+
+	if [ -f "$eeprom_path" ]; then
+		address=$(get_mac_binary "$eeprom_path" 0xfa)
+		if [ "$interface" = "lan" ]; then
+			address=$(macaddr_setbit_la "$address")
+		fi
+	else
+		address=$(generate_mac_from_mmc_cid)
+		if [ "$interface" = "lan" ]; then
+			address=$(macaddr_add "$address" 1)
+		fi
+	fi
+
+	echo "$address"
+}
+
+rockchip_setup_macs()
+{
+	local board="$1"
+	local lan_mac=""
+	local wan_mac=""
+	local label_mac=""
+
+	case "$board" in
+	embedfire,doornet1|\
+	embedfire,doornet2|\
+	embedfire,lubancat-1|\
+	embedfire,lubancat-1n|\
+	embedfire,lubancat-2|\
+	embedfire,lubancat-2n|\
+	embedfire,lubancat-5|\
+	hinlink,opc-h66k|\
+	hinlink,opc-h68k|\
+	hinlink,opc-h69k|\
+	hinlink,h88k|\
+	friendlyarm,nanopi-r2c|\
+	friendlyarm,nanopi-r2s|\
+	friendlyelec,nanopi-r3s|\
+	friendlyarm,nanopi-r5c|\
+	friendlyarm,nanopi-r5s|\
+	friendlyarm,nanopc-t6|\
+	friendlyarm,nanopi-r6s|\
+	friendlyarm,nanopi-r6c)
+		wan_mac=$(generate_mac_from_mmc_cid)
+		lan_mac=$(macaddr_add "$wan_mac" +1)
+		;;
+	friendlyarm,nanopi-r4se|\
+	friendlyarm,nanopi-r4s)
+		wan_mac=$(nanopi_r4s_get_mac wan)
+		lan_mac=$(nanopi_r4s_get_mac lan)
+		;;
+	esac
+
+	[ -n "$lan_mac" ] && ucidef_set_interface_macaddr "lan" $lan_mac
+	[ -n "$wan_mac" ] && ucidef_set_interface_macaddr "wan" $wan_mac
+	[ -n "$label_mac" ] && ucidef_set_label_macaddr $label_mac
+}
+
+board_config_update
+board=$(board_name)
+rockchip_setup_interfaces $board
+rockchip_setup_macs $board
+board_config_flush
+wifi config && wifi
+exit 0
