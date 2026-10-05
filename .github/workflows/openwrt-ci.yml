@@ -18,13 +18,11 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y             build-essential clang flex bison gawk gettext             git libncurses-dev libssl-dev             python3 python3-pip rsync unzip wget zstd
+          sudo apt-get install -y \
+            build-essential clang flex bison gawk gettext \
+            git libncurses-dev libssl-dev \
+            python3 python3-pip rsync unzip wget zstd
           pip3 install pyelftools
-
-      - name: Fix permissions
-        run: |
-          chmod +x ./scripts/* || true
-          find . -type f \( -name "*.sh" -o -name "*.pl" -o -name "*.py" \) -exec chmod +x {} \; || true
 
       - name: Add feeds
         run: |
@@ -37,40 +35,6 @@ jobs:
           ./scripts/feeds update -a
           ./scripts/feeds install -a -f
 
-      - name: Remove incompatible packages
-        run: |
-          ./scripts/feeds uninstall geoview || true
-          rm -rf feeds/passwall_packages/geoview || true
-
-          ./scripts/feeds uninstall rust || true
-          rm -rf feeds/packages/lang/rust || true
-
-          ./scripts/feeds uninstall shadowsocks-rust || true
-          rm -rf feeds/passwall_packages/shadowsocks-rust || true
-
-          ./scripts/feeds uninstall shadowsocksr-libev || true
-          rm -rf feeds/passwall_packages/shadowsocksr-libev || true
-
-
-      - name: Remove unsupported passwall components
-        run: |
-          ./scripts/feeds uninstall v2ray-plugin || true
-          rm -rf feeds/passwall_packages/v2ray-plugin || true
-
-      - name: Final PassWall compatibility cleanup
-        run: |
-          ./scripts/feeds uninstall geoview || true
-          ./scripts/feeds uninstall rust || true
-          ./scripts/feeds uninstall shadowsocks-rust || true
-          ./scripts/feeds uninstall shadowsocksr-libev || true
-          ./scripts/feeds uninstall v2ray-plugin || true
-
-          rm -rf feeds/passwall_packages/geoview || true
-          rm -rf feeds/packages/lang/rust || true
-          rm -rf feeds/passwall_packages/shadowsocks-rust || true
-          rm -rf feeds/passwall_packages/shadowsocksr-libev || true
-          rm -rf feeds/passwall_packages/v2ray-plugin || true
-
       - name: Load DoorNet2 config
         run: |
           if [ -f config/doorNet2.config ]; then
@@ -81,6 +45,28 @@ jobs:
             echo "DoorNet2 config not found"
             exit 1
           fi
+
+      - name: Disable incompatible packages
+        run: |
+          ./scripts/feeds uninstall geoview || true
+          ./scripts/feeds uninstall rust || true
+          ./scripts/feeds uninstall shadowsocks-rust || true
+          ./scripts/feeds uninstall shadowsocksr-libev || true
+          ./scripts/feeds uninstall v2ray-plugin || true
+
+          rm -rf feeds/passwall_packages/geoview || true
+          rm -rf feeds/packages/lang/rust || true
+          rm -rf feeds/passwall_packages/shadowsocks-rust || true
+          rm -rf feeds/passwall_packages/shadowsocksr-libev || true
+          rm -rf feeds/passwall_packages/v2ray-plugin || true
+
+          echo "CONFIG_PACKAGE_geoview=n" >> .config
+          echo "CONFIG_PACKAGE_v2ray-plugin=n" >> .config
+          echo "CONFIG_PACKAGE_shadowsocks-rust=n" >> .config
+          echo "CONFIG_PACKAGE_shadowsocksr-libev=n" >> .config
+
+      - name: Defconfig
+        run: |
           make defconfig
 
       - name: Build firmware
