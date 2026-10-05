@@ -52,6 +52,29 @@ jobs:
           echo "Rust LLVM bootstrap setting:"
           grep -n 'download-ci-llvm' "$RUST_MK"
 
+      - name: Patch PassWall2 geoview hard dependency
+        run: |
+          set -e
+
+          echo "Searching for luci-app-passwall2 Makefile..."
+          mapfile -t PW2_MKS < <(find feeds package -path '*/luci-app-passwall2/Makefile' -type f -o -path '*/luci-app-passwall2/Makefile' -type l 2>/dev/null | sort -u)
+
+          if [ "${#PW2_MKS[@]}" -eq 0 ]; then
+            echo "INFO: luci-app-passwall2 Makefile is not present in this simplified source tree."
+          else
+            for mk in "${PW2_MKS[@]}"; do
+              real_mk="$(readlink -f "$mk" || true)"
+              [ -n "$real_mk" ] || real_mk="$mk"
+              echo "Patching: $real_mk"
+              sed -i -E 's/(^|[[:space:]])\+geoview([[:space:]]|$)/\1\2/g' "$real_mk"
+              if grep -Eq '(^|[[:space:]])\+geoview([[:space:]]|$)' "$real_mk"; then
+                echo "ERROR: PassWall2 still has a hard +geoview dependency: $real_mk"
+                grep -n 'geoview' "$real_mk" || true
+                exit 1
+              fi
+            done
+          fi
+
       - name: Load DoorNet2 config and sanitize package selection
         run: |
           set -e
@@ -77,9 +100,22 @@ jobs:
           }
 
           # Known incompatible / currently unnecessary packages.
+          # Disable both the package symbols and the PassWall selectors that
+          # would otherwise re-select them during make defconfig on aarch64.
           disable_config CONFIG_PACKAGE_geoview
+          disable_config CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Geoview
+
           disable_config CONFIG_PACKAGE_v2ray-plugin
+          disable_config CONFIG_PACKAGE_luci-app-passwall_INCLUDE_V2ray_Plugin
+          disable_config CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_V2ray_Plugin
+
           disable_config CONFIG_PACKAGE_shadowsocks-rust
+          disable_config CONFIG_PACKAGE_shadowsocks-rust-sslocal
+          disable_config CONFIG_PACKAGE_shadowsocks-rust-ssserver
+          disable_config CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client
+          disable_config CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Server
+          disable_config CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Client
+          disable_config CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Shadowsocks_Rust_Server
 
           # Disable ShadowsocksR Libev at both PassWall selector level and
           # package/subpackage level.  The previous CONFIG_PACKAGE_shadowsocksr-libev=n
@@ -136,11 +172,27 @@ jobs:
           done
 
           echo "========== DISABLED PACKAGE CHECK =========="
-          grep -E 'geoview|ShadowsocksR_Libev|shadowsocksr-libev|uugamebooster|uuplugin' .config || true
+          grep -E 'geoview|V2ray_Plugin|v2ray-plugin|Shadowsocks_Rust|shadowsocks-rust|ShadowsocksR_Libev|shadowsocksr-libev|uugamebooster|uuplugin' .config || true
 
           if grep -q '^CONFIG_PACKAGE_geoview=y' .config; then
-            echo "ERROR: geoview was re-selected by dependency after make defconfig."
-            echo "Likely PassWall2 dependency must be patched before the long build."
+            echo "ERROR: geoview was re-selected after make defconfig."
+            echo "Check PassWall INCLUDE_Geoview or a PassWall2 hard dependency."
+            exit 1
+          fi
+
+          if grep -Eq '^CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Geoview=y' .config; then
+            echo "ERROR: PassWall Geoview selector is still enabled."
+            exit 1
+          fi
+
+          if grep -Eq '^CONFIG_PACKAGE_(v2ray-plugin|shadowsocks-rust-sslocal|shadowsocks-rust-ssserver)=y' .config; then
+            echo "ERROR: a known incompatible PassWall component was re-selected."
+            grep -E '^CONFIG_PACKAGE_(v2ray-plugin|shadowsocks-rust-sslocal|shadowsocks-rust-ssserver)=y' .config || true
+            exit 1
+          fi
+
+          if grep -Eq '^CONFIG_PACKAGE_luci-app-passwall2?_INCLUDE_(V2ray_Plugin|Shadowsocks_Rust_Client|Shadowsocks_Rust_Server)=y' .config; then
+            echo "ERROR: PassWall/PassWall2 selector re-enabled v2ray-plugin or shadowsocks-rust."
             exit 1
           fi
 
@@ -165,6 +217,9 @@ jobs:
         run: |
           echo "========== geoview references =========="
           grep -Rni --include='Makefile' 'geoview' feeds/passwall* package 2>/dev/null | head -100 || true
+
+          echo "========== Rust / V2ray plugin references =========="
+          grep -Rni --include='Makefile' -E 'Shadowsocks_Rust|shadowsocks-rust|V2ray_Plugin|v2ray-plugin' feeds/passwall* package 2>/dev/null | head -150 || true
 
           echo "========== ShadowsocksR Libev references =========="
           grep -Rni --include='Makefile' -E 'ShadowsocksR_Libev|shadowsocksr-libev' feeds/passwall* package 2>/dev/null | head -150 || true
