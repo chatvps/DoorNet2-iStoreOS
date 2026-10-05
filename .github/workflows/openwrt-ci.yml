@@ -116,6 +116,23 @@ jobs:
       - name: Checkout OpenWrt
         uses: actions/checkout@v4
 
+      - name: Verify canonical DoorNet2 repository
+        run: |
+          set -e
+
+          EXPECTED_REPO="chatvps/DoorNet2-iStoreOS"
+
+          echo "Current repository:  ${GITHUB_REPOSITORY}"
+          echo "Expected repository: ${EXPECTED_REPO}"
+
+          if [ "${GITHUB_REPOSITORY}" != "${EXPECTED_REPO}" ]; then
+              echo "ERROR: This Final workflow must run in ${EXPECTED_REPO}."
+              echo "Running it in another fork would bake the wrong OPKG/release URLs into the firmware."
+              exit 1
+          fi
+
+          echo "OK: canonical DoorNet2 repository verified."
+
 
       # ============================================================
       # 3. Version
@@ -510,12 +527,32 @@ jobs:
             files/etc/passwall2 \
             files/etc/smartdns
 
+          # The historical DoorNet2 source tree may already contain a modified
+          # dnsmasq template that forces 127.0.0.1:3053 + noresolv=1.  The Final
+          # user-managed image must not ship that chain because AdGuard/SmartDNS
+          # are intentionally OFF on a clean install.  Scrub only files which
+          # actually contain that exact old loopback target.
+          echo "===== SCRUB LEGACY FORCED DNSMASQ CHAIN ====="
+          while IFS= read -r dns_file; do
+              [ -f "$dns_file" ] || continue
+              echo "Sanitizing: $dns_file"
+              sed -i \
+                -e '/127\.0\.0\.1#3053/d' \
+                -e "/option[[:space:]]\+noresolv[[:space:]]\+['\"]\?1['\"]\?/d" \
+                "$dns_file"
+          done < <(
+              grep -RIl --exclude-dir=.git '127.0.0.1#3053' \
+                package feeds target config 2>/dev/null || true
+          )
+
           # Remove old DoorNet2 automation which could silently rewrite a user's
           # DNS/proxy choices on later boots.
           rm -f \
             files/etc/init.d/doornet2-dns-chain \
             files/etc/init.d/passwall-delay \
             files/etc/init.d/passwall2-delay \
+            files/etc/uci-defaults/96-doornet2-passwall-shunt \
+            files/etc/uci-defaults/96-doornet2-shunt-presets \
             files/etc/uci-defaults/97-doornet2-network-apps
 
           mkdir -p \
@@ -590,8 +627,15 @@ jobs:
           fi
 
           # dnsmasq-full is deliberately NOT disabled.  It is the router's base
-          # DHCP/DNS service.  A clean image uses its stock upstream/resolv.conf
-          # behaviour; there is no forced 127.0.0.1:3053/SmartDNS/AdGuard chain.
+          # DHCP/DNS service.  A clean image uses its normal WAN resolv.conf
+          # upstreams.  As a first-boot safety net, explicitly remove any stale
+          # forced localhost DNS chain inherited from an old source template.
+          if uci -q get dhcp.@dnsmasq[0] >/dev/null 2>&1; then
+              uci -q delete dhcp.@dnsmasq[0].noresolv
+              uci -q delete dhcp.@dnsmasq[0].server
+              uci -q set dhcp.@dnsmasq[0].resolvfile='/tmp/resolv.conf.d/resolv.conf.auto'
+              uci -q commit dhcp
+          fi
 
           # Mark the clean-install initialization as completed.  This marker is
           # explicitly retained during later sysupgrades so user settings are not
@@ -630,6 +674,252 @@ jobs:
           echo "AdGuardHome: installed, default OFF"
           echo "dnsmasq-full: installed, normal base service ON, no forced DNS chain"
           echo "User settings are not rewritten on normal reboots."
+
+      - name: Seed PassWall and PassWall2 shunt presets
+        run: |
+          set -e
+
+          mkdir -p \
+            files/etc/uci-defaults \
+            files/lib/upgrade/keep.d
+
+          cat > files/etc/uci-defaults/96-doornet2-shunt-presets <<'EOF'
+          #!/bin/sh
+
+          # DoorNet2 preset rules are seeded once.  The marker is preserved by
+          # sysupgrade so later firmware upgrades do not overwrite user-selected
+          # nodes, edited rules, or the user's PassWall/PassWall2 configuration.
+          PRESET_MARKER="/etc/doornet2-shunt-presets-v1"
+          NETWORK_MARKER="/etc/doornet2-user-network-initialized"
+
+          [ -e "$PRESET_MARKER" ] && exit 0
+
+          RETAINED=0
+          [ -e "$NETWORK_MARKER" ] && RETAINED=1
+
+          add_rule()
+          {
+              cfg="$1"
+              id="$2"
+              remarks="$3"
+              domains="$4"
+              ips="$5"
+
+              # During a retained upgrade, never overwrite an existing rule
+              # with the same ID.  On a clean install, create the known preset
+              # deterministically from scratch.
+              if [ "$RETAINED" = "1" ] && uci -q get "$cfg.$id" >/dev/null 2>&1; then
+                  return 0
+              fi
+
+              uci -q delete "$cfg.$id"
+              uci -q set "$cfg.$id=shunt_rules"
+              uci -q set "$cfg.$id.remarks=$remarks"
+              uci -q set "$cfg.$id.network=tcp,udp"
+
+              if [ -n "$domains" ]; then
+                  domain_list="$(
+                      printf '%s' "$domains" \
+                        | tr ',' '\n' \
+                        | sed '/^$/d;s/^/domain:/'
+                  )"
+                  uci -q set "$cfg.$id.domain_list=$domain_list"
+              fi
+
+              if [ -n "$ips" ]; then
+                  ip_list="$(
+                      printf '%s' "$ips" \
+                        | tr ',' '\n' \
+                        | sed '/^$/d'
+                  )"
+                  uci -q set "$cfg.$id.ip_list=$ip_list"
+              fi
+          }
+
+          seed_config()
+          {
+              cfg="$1"
+              [ -f "/etc/config/$cfg" ] || return 0
+
+              # On a clean PassWall install, remove only its untouched stock
+              # myshunt entry so LuCI does not show two nodes named 分流总节点.
+              # Retained upgrades never delete an existing user section.
+              if [ "$cfg" = "passwall" ] && [ "$RETAINED" = "0" ]; then
+                  if [ "$(uci -q get passwall.myshunt.remarks)" = "分流总节点" ] && \
+                     [ "$(uci -q get passwall.myshunt.protocol)" = "_shunt" ]; then
+                      uci -q delete passwall.myshunt
+                  fi
+              fi
+
+              # Priority / safety rules.
+              add_rule "$cfg" DN_ForcedDirect "DoorNet2 强制直连" \
+                "api.example.com,speedtest.net" ""
+
+              add_rule "$cfg" DN_TencentDirect "微信 / QQ / 腾讯媒体强制直连" \
+                "wechat.com,weixin.qq.com,wx.qq.com,wechatapp.com,qpic.cn,qq.com,qzone.qq.com,gtimg.com,idqqimg.com,qlogo.cn,weixinbridge.com" ""
+
+              add_rule "$cfg" DN_ChatGPT_Login "ChatGPT 登录完整链路" \
+                "auth.openai.com,chatgpt.com,ct.sendgrid.net,intercom.io,intercomcdn.com,oaistatic.com,oaiusercontent.com,openai.com,oaistatsig.com,auth0.openai.com,cdn.openaimerge.com,cdn.workos.com,challenges.cloudflare.com,forwarder.workos.com,humb.apple.com,images.workoscdn.com,js.intercomcdn.com,js.stripe.com,o207216.ingest.sentry.io,o33249.ingest.sentry.io,rum.browser-intake-datadoghq.com,setup.auth.openai.com,setup.workos.com,workos.imgix.net" ""
+
+              # Mainland communication.
+              add_rule "$cfg" DN_WeChat "WeChat / 微信" \
+                "wechat.com,weixin.qq.com,wx.qq.com,wechatapp.com,qpic.cn,weixinbridge.com" ""
+              add_rule "$cfg" DN_QQ "QQ / 腾讯" \
+                "qq.com,qzone.qq.com,gtimg.com,idqqimg.com,qlogo.cn" ""
+
+              # Overseas communication.
+              add_rule "$cfg" DN_LINE "LINE" \
+                "line.me,line-apps.com,line-scdn.net,lin.ee,line.naver.jp" ""
+              add_rule "$cfg" DN_WhatsApp "WhatsApp" \
+                "whatsapp.com,whatsapp.net" ""
+              add_rule "$cfg" DN_Signal "Signal" \
+                "signal.org,signal.art,whispersystems.org" ""
+              add_rule "$cfg" DN_Telegram "Telegram" \
+                "telegram.org,t.me,telegram.me,telegra.ph" \
+                "149.154.160.0/20,91.108.4.0/22,91.108.8.0/22,91.108.56.0/22"
+              add_rule "$cfg" DN_Discord "Discord" \
+                "discord.com,discord.gg,discordapp.com,discordapp.net,discordcdn.com" ""
+
+              # Social.
+              add_rule "$cfg" DN_Facebook "Facebook / Messenger" \
+                "facebook.com,fbcdn.net,fb.me,fbsbx.com,messenger.com" ""
+              add_rule "$cfg" DN_Instagram "Instagram" \
+                "instagram.com,cdninstagram.com" ""
+              add_rule "$cfg" DN_XTwitter "X / Twitter" \
+                "x.com,twitter.com,twimg.com,t.co" ""
+              add_rule "$cfg" DN_Reddit "Reddit" \
+                "reddit.com,redditmedia.com,redditstatic.com,redd.it" ""
+
+              # Google.
+              add_rule "$cfg" DN_YouTube "YouTube" \
+                "youtube.com,youtu.be,ytimg.com,googlevideo.com,youtube-nocookie.com" ""
+              add_rule "$cfg" DN_GoogleAI "Google AI / Gemini" \
+                "gemini.google.com,ai.google.dev,generativelanguage.googleapis.com,aistudio.google.com,deepmind.google" ""
+              add_rule "$cfg" DN_GmailDrive "Gmail / Google Drive" \
+                "gmail.com,mail.google.com,drive.google.com,docs.google.com" ""
+              add_rule "$cfg" DN_Google "Google" \
+                "google.com,gstatic.com,googleapis.com,googleusercontent.com,ggpht.com" ""
+
+              # AI.
+              add_rule "$cfg" DN_OpenAI "OpenAI / ChatGPT" \
+                "openai.com,chatgpt.com,auth.openai.com,oaistatic.com,oaiusercontent.com,oaistatsig.com" ""
+              add_rule "$cfg" DN_Claude "Claude / Anthropic" \
+                "claude.ai,anthropic.com" ""
+              add_rule "$cfg" DN_Perplexity "Perplexity" "perplexity.ai" ""
+              add_rule "$cfg" DN_Copilot "Microsoft Copilot" \
+                "copilot.microsoft.com,copilot.cloud.microsoft" ""
+              add_rule "$cfg" DN_Grok "Grok / xAI" "grok.com,x.ai" ""
+
+              # Streaming.
+              add_rule "$cfg" DN_Netflix "Netflix" \
+                "netflix.com,nflxvideo.net,nflximg.net,nflxext.com,nflxso.net" ""
+              add_rule "$cfg" DN_DisneyPlus "Disney+" \
+                "disneyplus.com,dssott.com,bamgrid.com,disney-plus.net" ""
+              add_rule "$cfg" DN_MaxHBO "Max / HBO" \
+                "max.com,hbomax.com,hbo.com,hbogo.com" ""
+              add_rule "$cfg" DN_PrimeVideo "Amazon Prime Video" \
+                "primevideo.com,amazonvideo.com,aiv-cdn.net" ""
+              add_rule "$cfg" DN_Spotify "Spotify" \
+                "spotify.com,scdn.co,spotifycdn.com" ""
+              add_rule "$cfg" DN_TikTok "TikTok" \
+                "tiktok.com,tiktokcdn.com,tiktokv.com,byteoversea.com,ibytedtos.com,muscdn.com" ""
+
+              # Platform / cloud / work.
+              add_rule "$cfg" DN_Apple "Apple / iCloud / App Store" \
+                "apple.com,icloud.com,apple-cloudkit.com,mzstatic.com" ""
+              add_rule "$cfg" DN_Microsoft "Microsoft / Office / OneDrive" \
+                "microsoft.com,live.com,office.com,office365.com,onedrive.com" ""
+              add_rule "$cfg" DN_GitHub "GitHub" \
+                "github.com,githubusercontent.com,githubassets.com,github.io" ""
+              add_rule "$cfg" DN_Slack "Slack" "slack.com,slack-edge.com" ""
+              add_rule "$cfg" DN_Zoom "Zoom" "zoom.us,zoom.com" ""
+              add_rule "$cfg" DN_Notion "Notion" \
+                "notion.so,notion.site,notionusercontent.com" ""
+              add_rule "$cfg" DN_Dropbox "Dropbox" \
+                "dropbox.com,dropboxapi.com,dropboxusercontent.com" ""
+
+              # Games / local media / umbrella rows.
+              add_rule "$cfg" DN_PlayStation "PlayStation" \
+                "playstation.com,playstation.net,sonyentertainmentnetwork.com" ""
+              add_rule "$cfg" DN_Nintendo "Nintendo" \
+                "nintendo.com,nintendo.net,nintendo.co.jp" ""
+              add_rule "$cfg" DN_Xbox "Xbox" \
+                "xbox.com,xboxlive.com,xboxservices.com" ""
+              add_rule "$cfg" DN_LocalMedia "Emby / Jellyfin / Plex" \
+                "emby.media,jellyfin.org,plex.tv" ""
+              add_rule "$cfg" DN_AIGC "AIGC（汇总备用）" "" ""
+              add_rule "$cfg" DN_Streaming "Streaming（汇总备用）" "" ""
+              add_rule "$cfg" DN_ProxyGame "ProxyGame（汇总备用）" "" ""
+              add_rule "$cfg" DN_DirectGame "DirectGame" "" ""
+
+              # Migrate the old DoorNet2 R4Shunt node in place when present so
+              # retained node selections survive.  New installs use DN_Shunt and
+              # expose only the user-facing name “分流总节点”.
+              if uci -q get "$cfg.DN_Shunt" >/dev/null 2>&1; then
+                  SHUNT_ID="DN_Shunt"
+              elif uci -q get "$cfg.R4Shunt" >/dev/null 2>&1; then
+                  SHUNT_ID="R4Shunt"
+                  old_remarks="$(uci -q get "$cfg.$SHUNT_ID.remarks")"
+                  if [ -z "$old_remarks" ] || [ "$old_remarks" = "R4 分流总节点" ]; then
+                      uci -q set "$cfg.$SHUNT_ID.remarks=分流总节点"
+                  fi
+              else
+                  SHUNT_ID="DN_Shunt"
+                  uci -q set "$cfg.$SHUNT_ID=nodes"
+                  uci -q set "$cfg.$SHUNT_ID.remarks=分流总节点"
+                  uci -q set "$cfg.$SHUNT_ID.type=Xray"
+                  uci -q set "$cfg.$SHUNT_ID.protocol=_shunt"
+                  uci -q set "$cfg.$SHUNT_ID.domainStrategy=IPOnDemand"
+                  uci -q set "$cfg.$SHUNT_ID.default_node=_direct"
+              fi
+
+              # Required direct rules are attached by default.  During retained
+              # upgrades, preserve any explicit user choice already present.
+              for pair in \
+                  DN_ForcedDirect:_direct \
+                  DN_TencentDirect:_direct \
+                  DN_WeChat:_direct \
+                  DN_QQ:_direct; do
+                  opt="${pair%%:*}"
+                  val="${pair#*:}"
+                  if [ "$RETAINED" = "0" ] || [ -z "$(uci -q get "$cfg.$SHUNT_ID.$opt")" ]; then
+                      uci -q set "$cfg.$SHUNT_ID.$opt=$val"
+                  fi
+              done
+
+              # Put system safety rules first.  Reordering the rule sections does
+              # not alter user-selected node mappings in the shunt node.
+              uci -q reorder "$cfg.DN_ForcedDirect=0" >/dev/null 2>&1 || true
+              uci -q reorder "$cfg.DN_TencentDirect=1" >/dev/null 2>&1 || true
+              uci -q reorder "$cfg.DN_ChatGPT_Login=2" >/dev/null 2>&1 || true
+
+              uci -q commit "$cfg"
+          }
+
+          seed_config passwall
+          seed_config passwall2
+
+          touch "$PRESET_MARKER"
+          exit 0
+          EOF
+
+          chmod 755 files/etc/uci-defaults/96-doornet2-shunt-presets
+          sh -n files/etc/uci-defaults/96-doornet2-shunt-presets
+
+          # Preserve the one-time seed marker so online upgrades never replay
+          # the preset initializer over a user's later edits/selections.
+          if ! grep -qx '/etc/doornet2-shunt-presets-v1' \
+              files/lib/upgrade/keep.d/doornet2-user-network-config; then
+              echo '/etc/doornet2-shunt-presets-v1' \
+                >> files/lib/upgrade/keep.d/doornet2-user-network-config
+          fi
+
+          echo "===== SHUNT PRESET POLICY ====="
+          echo "PassWall:  preloaded 分流总节点, plugin still default OFF"
+          echo "PassWall2: preloaded 分流总节点, plugin still default OFF"
+          echo "Proxy service rules have no baked-in personal node IDs."
+          echo "WeChat / QQ / Tencent + forced-direct rules default to direct."
+          echo "UU-specific domains are not present."
 
       - name: Verify DoorNet2 Design UI source
         run: |
@@ -1366,8 +1656,8 @@ jobs:
           DOORNET2_UPDATER='physical-target-guard-v2'
           DOORNET2_TF_CAPACITY='preserve-expanded-root-v1'
           DOORNET2_UI='quickstart-design-dark-v1'
-          DOORNET2_PASSWALL='passwall-passwall2-xray-online-v2'
-          DOORNET2_NETWORK_APPS='passwall-passwall2-smartdns-adguard-online-v3'
+          DOORNET2_PASSWALL='passwall-passwall2-xray-shunt-v3'
+          DOORNET2_NETWORK_APPS='passwall-passwall2-smartdns-adguard-user-managed-shunt-v5'
           DOORNET2_RUNTIME_MONITOR='thermal-time-v2'
           EOF
 
@@ -4424,12 +4714,27 @@ jobs:
               exit 1
           fi
 
+          if grep -RniE 'router\.uu\.163\.com|uu\.gdl\.netease\.com|uurouter\.gdl\.netease\.com' files 2>/dev/null; then
+              echo "ERROR: legacy UU-specific domain exists under files/."
+              exit 1
+          fi
+
           test -x files/usr/bin/doornet2-passwall-updater
           test -x files/usr/bin/doornet2-app-updater
           test -x files/etc/uci-defaults/97-doornet2-network-apps
           test -f files/lib/upgrade/keep.d/doornet2-user-network-config
           sh -n files/usr/bin/doornet2-app-updater
           sh -n files/etc/uci-defaults/97-doornet2-network-apps
+          test -x files/etc/uci-defaults/96-doornet2-shunt-presets
+          sh -n files/etc/uci-defaults/96-doornet2-shunt-presets
+          grep -q 'seed_config passwall' files/etc/uci-defaults/96-doornet2-shunt-presets
+          grep -q 'seed_config passwall2' files/etc/uci-defaults/96-doornet2-shunt-presets
+          grep -q 'remarks=分流总节点' files/etc/uci-defaults/96-doornet2-shunt-presets
+          grep -q 'api.example.com,speedtest.net' files/etc/uci-defaults/96-doornet2-shunt-presets
+          if grep -Ei 'router\.uu\.163\.com|uu\.gdl\.netease\.com|uurouter\.gdl\.netease\.com' files/etc/uci-defaults/96-doornet2-shunt-presets; then
+              echo "ERROR: UU-specific domain leaked into shunt presets."
+              exit 1
+          fi
 
           if [ -f files/etc/config/dhcp ]; then
               if grep -q '127\.0\.0\.1#3053' files/etc/config/dhcp || \
@@ -4500,6 +4805,11 @@ jobs:
               exit 1
           fi
 
+          if grep -RniE 'router\.uu\.163\.com|uu\.gdl\.netease\.com|uurouter\.gdl\.netease\.com' files 2>/dev/null; then
+              echo "ERROR: UU-specific domain exists in firmware overlay."
+              exit 1
+          fi
+
           echo "OK: dependency preflight passed."
 
       - name: Verify UU accelerator is completely absent
@@ -4516,6 +4826,11 @@ jobs:
               exit 1
           fi
 
+          if grep -RniE 'router\.uu\.163\.com|uu\.gdl\.netease\.com|uurouter\.gdl\.netease\.com' files 2>/dev/null; then
+              echo "ERROR: UU-specific domain found in files/."
+              exit 1
+          fi
+
           echo "OK: UU accelerator is absent from final firmware overlay and config."
 
       - name: Compile firmware
@@ -4528,6 +4843,114 @@ jobs:
           find ./bin/targets/ \
             -type f \
             | sort
+
+      - name: Audit generated rootfs before publishing
+        run: |
+          set -e
+
+          ROOTFS_TAR="$(
+            find ./bin/targets/rockchip/armv8 \
+              -maxdepth 1 -type f \
+              -name '*embedfire_doornet2-rootfs.tar.gz' \
+              | head -n 1
+          )"
+
+          if [ -z "$ROOTFS_TAR" ]; then
+              echo "ERROR: generated DoorNet2 rootfs tarball not found."
+              exit 1
+          fi
+
+          AUDIT_DIR="$(mktemp -d)"
+          trap 'rm -rf "$AUDIT_DIR"' EXIT
+          tar -xzf "$ROOTFS_TAR" -C "$AUDIT_DIR"
+
+          echo "===== ROOTFS PACKAGE CHECK ====="
+          for pkg in \
+            luci-app-passwall \
+            luci-app-passwall2 \
+            xray-core \
+            smartdns \
+            luci-app-smartdns \
+            adguardhome \
+            luci-app-store \
+            dnsmasq-full; do
+              grep -q "^Package: ${pkg}$" "$AUDIT_DIR/usr/lib/opkg/status" || {
+                  echo "ERROR: required package missing from rootfs: $pkg"
+                  exit 1
+              }
+          done
+
+          echo "===== ROOTFS DEFAULT DNS CHECK ====="
+          if grep -q '127\.0\.0\.1#3053' "$AUDIT_DIR/etc/config/dhcp" || \
+             grep -Eq "option[[:space:]]+noresolv[[:space:]]+['\"]?1" "$AUDIT_DIR/etc/config/dhcp"; then
+              echo "ERROR: generated rootfs still contains the old forced dnsmasq -> AdGuard chain."
+              cat "$AUDIT_DIR/etc/config/dhcp"
+              exit 1
+          fi
+
+          grep -q "option 'enabled' '0'" "$AUDIT_DIR/etc/config/smartdns" || {
+              echo "ERROR: SmartDNS is not OFF by default in generated rootfs."
+              exit 1
+          }
+
+          test -x "$AUDIT_DIR/etc/uci-defaults/97-doornet2-network-apps"
+          test -f "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
+          grep -q '/etc/config/passwall' "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
+          grep -q '/etc/config/passwall2' "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
+          grep -q '/etc/config/smartdns' "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
+          grep -q '/etc/adguardhome.yaml' "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
+          grep -q '/etc/config/dhcp' "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
+          grep -q '/etc/doornet2-shunt-presets-v1' "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
+
+          echo "===== ROOTFS SHUNT PRESET CHECK ====="
+          SHUNT_PRESET="$AUDIT_DIR/etc/uci-defaults/96-doornet2-shunt-presets"
+          test -x "$SHUNT_PRESET"
+          sh -n "$SHUNT_PRESET"
+          grep -q 'seed_config passwall' "$SHUNT_PRESET"
+          grep -q 'seed_config passwall2' "$SHUNT_PRESET"
+          grep -q 'remarks=分流总节点' "$SHUNT_PRESET"
+          grep -q 'DN_WeChat' "$SHUNT_PRESET"
+          grep -q 'DN_OpenAI' "$SHUNT_PRESET"
+          grep -q 'DN_Netflix' "$SHUNT_PRESET"
+          grep -q 'api.example.com,speedtest.net' "$SHUNT_PRESET"
+          if grep -Ei 'router\.uu\.163\.com|uu\.gdl\.netease\.com|uurouter\.gdl\.netease\.com' "$SHUNT_PRESET"; then
+              echo "ERROR: UU-specific domain exists in generated shunt preset."
+              exit 1
+          fi
+
+          echo "===== ROOTFS ONLINE-UPGRADE CHECK ====="
+          grep -q 'REPO="chatvps/DoorNet2-iStoreOS"' "$AUDIT_DIR/usr/bin/doornet2-updater"
+          grep -q 'keep_config.*true' "$AUDIT_DIR/usr/bin/doornet2-updater"
+          if grep -Eq '/sbin/sysupgrade[[:space:]\\]*-n|sysupgrade[[:space:]]+-n' "$AUDIT_DIR/usr/bin/doornet2-updater"; then
+              echo "ERROR: updater contains sysupgrade -n and would discard settings."
+              exit 1
+          fi
+
+          echo "===== ROOTFS REPOSITORY CHECK ====="
+          if grep -Rni 'bwgone/DoorNet2-iStoreOS' \
+              "$AUDIT_DIR/etc" "$AUDIT_DIR/usr" 2>/dev/null; then
+              echo "ERROR: stale bwgone repository URL is baked into generated rootfs."
+              exit 1
+          fi
+
+          grep -q "DOORNET2_GITHUB_REPOSITORY='chatvps/DoorNet2-iStoreOS'" \
+            "$AUDIT_DIR/etc/doornet2_release"
+
+          echo "===== ROOTFS UU ABSENCE CHECK ====="
+          if find "$AUDIT_DIR" \
+              \( -iname '*uugamebooster*' -o -iname '*uuplugin*' -o -iname 'doornet2-uu' -o -iname 'uu-delay' \) \
+              -print | grep -q .; then
+              echo "ERROR: UU runtime file exists in generated rootfs."
+              exit 1
+          fi
+
+          if grep -RniE 'router\.uu\.163\.com|uu\.gdl\.netease\.com|uurouter\.gdl\.netease\.com' \
+              "$AUDIT_DIR/etc" "$AUDIT_DIR/usr" 2>/dev/null; then
+              echo "ERROR: UU-specific domain exists in generated rootfs."
+              exit 1
+          fi
+
+          echo "OK: generated DoorNet2 rootfs audit passed."
 
 
       # ============================================================
@@ -4628,7 +5051,7 @@ jobs:
             "extroot": false,
             "updater": "physical-target-guard-v2",
             "tf_capacity": "preserve-expanded-root-v1",
-            "network_apps": "passwall-passwall2-smartdns-adguard-online-v3",
+            "network_apps": "passwall-passwall2-smartdns-adguard-user-managed-shunt-v5",
             "ui": "quickstart-design-dark-v1",
             "runtime_monitor": "thermal-time-v2"
           }
@@ -4678,6 +5101,14 @@ jobs:
           - Argon and Bootstrap remain installed as recovery themes
           - CPU temperature + router date/time use a separate theme-independent badge
           - Installed theme headers are patched on first boot as a safety net
+
+          Built-in shunt presets:
+
+          - PassWall and PassWall2 both include a user-facing "分流总节点" preset
+          - WeChat / QQ / Tencent media and forced-direct rules default to direct
+          - Other service rules are preloaded but do not contain personal node IDs
+          - User node selections and edited rules are preserved across retained online upgrades
+          - No UU-specific rule, menu, runtime, or updater is included
 
           Online-updatable network applications:
 
@@ -5010,7 +5441,7 @@ jobs:
           echo "===== PASSWALL ====="
 
           grep -q \
-            "DOORNET2_PASSWALL='passwall-passwall2-xray-online-v2'" \
+            "DOORNET2_PASSWALL='passwall-passwall2-xray-shunt-v3'" \
             files/etc/doornet2_release
 
           grep -q '^CONFIG_PACKAGE_luci-app-passwall=y$' .config
@@ -5053,7 +5484,7 @@ jobs:
           echo "===== PASSWALL2 + ONLINE NETWORK APPS ====="
 
           grep -q \
-            "DOORNET2_NETWORK_APPS='passwall-passwall2-smartdns-adguard-online-v3'" \
+            "DOORNET2_NETWORK_APPS='passwall-passwall2-smartdns-adguard-user-managed-shunt-v5'" \
             files/etc/doornet2_release
 
           grep -q '^CONFIG_PACKAGE_luci-app-passwall2=y$' .config
@@ -5090,12 +5521,18 @@ jobs:
           test -x files/etc/uci-defaults/97-doornet2-network-apps
           test -f files/lib/upgrade/keep.d/doornet2-user-network-config
           sh -n files/etc/uci-defaults/97-doornet2-network-apps
+          test -x files/etc/uci-defaults/96-doornet2-shunt-presets
+          sh -n files/etc/uci-defaults/96-doornet2-shunt-presets
+          grep -q 'seed_config passwall' files/etc/uci-defaults/96-doornet2-shunt-presets
+          grep -q 'seed_config passwall2' files/etc/uci-defaults/96-doornet2-shunt-presets
+          grep -q 'remarks=分流总节点' files/etc/uci-defaults/96-doornet2-shunt-presets
 
           grep -q '/etc/config/passwall' files/lib/upgrade/keep.d/doornet2-user-network-config
           grep -q '/etc/config/passwall2' files/lib/upgrade/keep.d/doornet2-user-network-config
           grep -q '/etc/config/smartdns' files/lib/upgrade/keep.d/doornet2-user-network-config
           grep -q '/etc/adguardhome.yaml' files/lib/upgrade/keep.d/doornet2-user-network-config
           grep -q '/etc/config/dhcp' files/lib/upgrade/keep.d/doornet2-user-network-config
+          grep -q '/etc/doornet2-shunt-presets-v1' files/lib/upgrade/keep.d/doornet2-user-network-config
 
           grep -nE \
             'luci-app-passwall2|smartdns|adguardhome|luci-app-smartdns' \
@@ -5109,6 +5546,11 @@ jobs:
 
           if grep -RniE 'uugamebooster|uuplugin|网易[[:space:]]*UU|NetEase[[:space:]]+UU' files 2>/dev/null; then
               echo "ERROR: UU runtime/menu/autostart/update content exists in final overlay."
+              exit 1
+          fi
+
+          if grep -RniE 'router\.uu\.163\.com|uu\.gdl\.netease\.com|uurouter\.gdl\.netease\.com' files 2>/dev/null; then
+              echo "ERROR: UU-specific domain exists in final overlay."
               exit 1
           fi
 
