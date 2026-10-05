@@ -51,6 +51,26 @@ jobs:
           ./scripts/feeds uninstall shadowsocksr-libev || true
           rm -rf feeds/passwall_packages/shadowsocksr-libev || true
 
+
+      - name: Remove unsupported passwall components
+        run: |
+          ./scripts/feeds uninstall v2ray-plugin || true
+          rm -rf feeds/passwall_packages/v2ray-plugin || true
+
+      - name: Final PassWall compatibility cleanup
+        run: |
+          ./scripts/feeds uninstall geoview || true
+          ./scripts/feeds uninstall rust || true
+          ./scripts/feeds uninstall shadowsocks-rust || true
+          ./scripts/feeds uninstall shadowsocksr-libev || true
+          ./scripts/feeds uninstall v2ray-plugin || true
+
+          rm -rf feeds/passwall_packages/geoview || true
+          rm -rf feeds/packages/lang/rust || true
+          rm -rf feeds/passwall_packages/shadowsocks-rust || true
+          rm -rf feeds/passwall_packages/shadowsocksr-libev || true
+          rm -rf feeds/passwall_packages/v2ray-plugin || true
+
       - name: Load DoorNet2 config
         run: |
           if [ -f config/doorNet2.config ]; then
