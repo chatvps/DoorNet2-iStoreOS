@@ -47,6 +47,23 @@ jobs:
 
           make defconfig
 
+
+      - name: Force disable incompatible packages in config
+        run: |
+          for p in geoview v2ray-plugin shadowsocks-rust shadowsocksr-libev; do
+            echo "CONFIG_PACKAGE_${p}=n" >> .config
+          done
+
+          sed -i '/CONFIG_PACKAGE_geoview=/d' .config
+          sed -i '/CONFIG_PACKAGE_v2ray-plugin=/d' .config
+          sed -i '/CONFIG_PACKAGE_shadowsocks-rust=/d' .config
+          sed -i '/CONFIG_PACKAGE_shadowsocksr-libev=/d' .config
+
+          echo "CONFIG_PACKAGE_geoview=n" >> .config
+          echo "CONFIG_PACKAGE_v2ray-plugin=n" >> .config
+          echo "CONFIG_PACKAGE_shadowsocks-rust=n" >> .config
+          echo "CONFIG_PACKAGE_shadowsocksr-libev=n" >> .config
+
       - name: Build firmware
         run: |
           make -j$(nproc) || make -j1 V=s
