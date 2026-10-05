@@ -2,6 +2,15 @@ name: DoorNet2 iStoreOS Final Build
 
 on:
   workflow_dispatch:
+    inputs:
+      runner_os:
+        description: "GitHub hosted runner image"
+        required: true
+        default: "ubuntu-24.04"
+        type: choice
+        options:
+          - ubuntu-24.04
+          - ubuntu-22.04
 
 permissions:
   contents: write
@@ -9,7 +18,11 @@ permissions:
 jobs:
   build_openwrt:
     name: Build DoorNet2 RK3399 Final Firmware
-    runs-on: ubuntu-22.04
+    # Default to the newer Ubuntu 24.04 hosted-runner pool.
+    # If GitHub has a pool-specific incident, workflow_dispatch lets us
+    # manually fall back to Ubuntu 22.04 without editing this file again.
+    runs-on: ${{ inputs.runner_os || 'ubuntu-24.04' }}
+    timeout-minutes: 360
 
     steps:
 
@@ -31,6 +44,11 @@ jobs:
             2>/dev/null || true
 
           docker system prune -af 2>/dev/null || true
+
+          echo "===== RUNNER ====="
+          echo "Requested runner: ${{ inputs.runner_os || 'ubuntu-24.04' }}"
+          uname -a
+          cat /etc/os-release || true
 
           sudo apt-get update
 
@@ -102,6 +120,21 @@ jobs:
             xmlto \
             xxd \
             zlib1g-dev
+
+          # Ubuntu 24.04 ships a newer default GCC than the old DoorNet2/LEDE
+          # buildroot was originally tested with.  Prefer GCC 12 when the
+          # package is available, while keeping Ubuntu 22.04 compatible.
+          if apt-cache show gcc-12 >/dev/null 2>&1 && \
+             apt-cache show g++-12 >/dev/null 2>&1; then
+              sudo apt-get install -y --no-install-recommends gcc-12 g++-12
+              sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 120
+              sudo update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 120
+          fi
+
+          echo "===== HOST TOOLCHAIN ====="
+          gcc --version | head -1
+          g++ --version | head -1
+          python3 --version
 
           sudo apt-get clean
           sudo timedatectl set-timezone "Asia/Shanghai" || true
