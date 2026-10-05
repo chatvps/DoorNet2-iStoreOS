@@ -485,30 +485,151 @@ jobs:
           cat files/etc/config/design
 
 
-      - name: Configure DNS safe defaults
+      - name: Configure clean user-managed network defaults
         run: |
           set -e
 
-          mkdir -p files/etc/uci-defaults
+          echo "===== REMOVE OLD BAKED-IN NETWORK APP CONFIGURATION ====="
+
+          # The repository may contain settings from an older DoorNet2 image.
+          # Do not bake those settings into a new clean image.  Let each package
+          # install its own stock configuration, then apply only a one-time
+          # disabled-by-default policy below.
+          rm -f \
+            files/etc/config/passwall \
+            files/etc/config/passwall2 \
+            files/etc/config/passwall_server \
+            files/etc/config/passwall2_server \
+            files/etc/config/smartdns \
+            files/etc/config/adguardhome \
+            files/etc/config/dhcp \
+            files/etc/adguardhome.yaml
+
+          rm -rf \
+            files/etc/passwall \
+            files/etc/passwall2 \
+            files/etc/smartdns
+
+          # Remove old DoorNet2 automation which could silently rewrite a user's
+          # DNS/proxy choices on later boots.
+          rm -f \
+            files/etc/init.d/doornet2-dns-chain \
+            files/etc/init.d/passwall-delay \
+            files/etc/init.d/passwall2-delay \
+            files/etc/uci-defaults/97-doornet2-network-apps
+
+          mkdir -p \
+            files/etc/uci-defaults \
+            files/lib/upgrade/keep.d
 
           cat > files/etc/uci-defaults/97-doornet2-network-apps <<'EOF'
           #!/bin/sh
 
-          # SmartDNS and AdGuard Home are installed but intentionally not
-          # enabled automatically.  Both can provide DNS, so configure the
-          # desired topology in LuCI before enabling either service.
-          for svc in smartdns adguardhome; do
+          # This script is intentionally a FIRST-BOOT-ONLY default initializer.
+          # OpenWrt removes successful /etc/uci-defaults scripts after they run.
+          # It must never overwrite the user's settings on ordinary reboots.
+          #
+          # A persistent marker is preserved by sysupgrade.  Therefore a retained
+          # online upgrade will NOT re-apply the clean-install OFF defaults.
+          MARKER="/etc/doornet2-user-network-initialized"
+          UPGRADE_STATE="/etc/doornet2-upgrade-service-state"
+
+          if [ -e "$MARKER" ]; then
+              # Online upgrade records AdGuard Home's enable/disable state because
+              # its package primarily uses /etc/rc.d symlinks rather than a UCI
+              # enabled flag.  Restore that state after the new image boots.
+              if [ -f "$UPGRADE_STATE" ] && [ -x /etc/init.d/adguardhome ]; then
+                  if grep -qx 'adguardhome_enabled=1' "$UPGRADE_STATE"; then
+                      /etc/init.d/adguardhome enable >/dev/null 2>&1 || true
+                  else
+                      /etc/init.d/adguardhome disable >/dev/null 2>&1 || true
+                      /etc/init.d/adguardhome stop >/dev/null 2>&1 || true
+                  fi
+                  rm -f "$UPGRADE_STATE"
+              fi
+              exit 0
+          fi
+
+          # PassWall / PassWall2: keep the normal init hooks installed so that
+          # once the user enables the plugin in LuCI, it can still auto-start on
+          # future reboots.  Only the package's UCI switch is set off initially.
+          if uci -q get passwall.@global[0] >/dev/null 2>&1; then
+              uci -q set passwall.@global[0].enabled='0'
+              uci -q set passwall.@global[0].socks_enabled='0'
+              uci -q commit passwall
+          fi
+
+          if uci -q get passwall2.@global[0] >/dev/null 2>&1; then
+              uci -q set passwall2.@global[0].enabled='0'
+              uci -q set passwall2.@global[0].socks_enabled='0'
+              uci -q commit passwall2
+          fi
+
+          # SmartDNS: installed but off by default.  Its init hook remains in
+          # place so enabling it later in LuCI persists across reboots.
+          if uci -q get smartdns.@smartdns[0] >/dev/null 2>&1; then
+              uci -q set smartdns.@smartdns[0].enabled='0'
+              uci -q commit smartdns
+          fi
+
+          # Stop the optional services on the clean first boot.
+          for svc in passwall passwall2 smartdns; do
               if [ -x "/etc/init.d/$svc" ]; then
-                  "/etc/init.d/$svc" disable >/dev/null 2>&1 || true
                   "/etc/init.d/$svc" stop >/dev/null 2>&1 || true
               fi
           done
+
+          # AdGuard Home has no equivalent stock UCI enable flag in this package.
+          # Keep it installed but remove its boot symlink on the clean first boot.
+          # After the user finishes configuring AdGuard Home, enabling its service
+          # once (LuCI/iStore or /etc/init.d/adguardhome enable) makes that choice
+          # persist normally across later reboots.
+          if [ -x /etc/init.d/adguardhome ]; then
+              /etc/init.d/adguardhome stop >/dev/null 2>&1 || true
+              /etc/init.d/adguardhome disable >/dev/null 2>&1 || true
+          fi
+
+          # dnsmasq-full is deliberately NOT disabled.  It is the router's base
+          # DHCP/DNS service.  A clean image uses its stock upstream/resolv.conf
+          # behaviour; there is no forced 127.0.0.1:3053/SmartDNS/AdGuard chain.
+
+          # Mark the clean-install initialization as completed.  This marker is
+          # explicitly retained during later sysupgrades so user settings are not
+          # reset to OFF after an online firmware update.
+          touch "$MARKER"
 
           exit 0
           EOF
 
           chmod 755 files/etc/uci-defaults/97-doornet2-network-apps
           sh -n files/etc/uci-defaults/97-doornet2-network-apps
+
+          cat > files/lib/upgrade/keep.d/doornet2-user-network-config <<'EOF'
+          # DoorNet2 user-managed network application settings.
+          # /etc/config is preserved by normal sysupgrade already; these explicit
+          # entries also cover non-UCI files used by the applications.
+          /etc/config/dhcp
+          /etc/config/passwall
+          /etc/config/passwall2
+          /etc/config/passwall_server
+          /etc/config/passwall2_server
+          /etc/config/smartdns
+          /etc/config/adguardhome
+          /etc/passwall/
+          /etc/passwall2/
+          /etc/smartdns/
+          /etc/adguardhome.yaml
+          /etc/doornet2-user-network-initialized
+          /etc/doornet2-upgrade-service-state
+          EOF
+
+          echo "===== CLEAN DEFAULT POLICY ====="
+          echo "PassWall:    installed, default OFF"
+          echo "PassWall2:   installed, default OFF"
+          echo "SmartDNS:    installed, default OFF"
+          echo "AdGuardHome: installed, default OFF"
+          echo "dnsmasq-full: installed, normal base service ON, no forced DNS chain"
+          echo "User settings are not rewritten on normal reboots."
 
       - name: Verify DoorNet2 Design UI source
         run: |
@@ -2413,6 +2534,25 @@ jobs:
           }
 
 
+          capture_user_state()
+          {
+              # The normal sysupgrade path preserves configuration by default
+              # because this updater NEVER uses the -n (discard settings) flag.
+              # Save the one service state that is not represented by a normal
+              # UCI enabled option: AdGuard Home's /etc/rc.d enable symlink.
+              if ls /etc/rc.d/S[0-9][0-9]adguardhome >/dev/null 2>&1; then
+                  echo 'adguardhome_enabled=1' > /etc/doornet2-upgrade-service-state
+              else
+                  echo 'adguardhome_enabled=0' > /etc/doornet2-upgrade-service-state
+              fi
+
+              # The marker prevents clean-install defaults from being applied
+              # again after a retained online upgrade.
+              touch /etc/doornet2-user-network-initialized
+              sync
+          }
+
+
           command_status()
           {
               get_current_version
@@ -2631,6 +2771,7 @@ jobs:
               printf '"upgrade_disk":"%s",' "$UPGRADE_DISK"
               printf '"sysupgrade_disk":"%s",' "$SYSUPGRADE_DISK"
               printf '"mmc_layout":"ok",'
+              printf '"keep_config":true,'
               printf '"target_guard":"ok"'
               printf '}\n'
           }
@@ -2717,6 +2858,11 @@ jobs:
               fi
 
 
+              # Retain current user configuration by default.  OpenWrt
+              # sysupgrade preserves settings unless -n is supplied; this updater
+              # intentionally never supplies -n.  Capture AdGuard Home's service
+              # enable state before the backup/flash phase as well.
+              capture_user_state
               sync
 
 
@@ -2738,6 +2884,7 @@ jobs:
               printf '"boot_media":"%s",' "$BOOT_MEDIA"
               printf '"upgrade_disk":"%s",' "$UPGRADE_DISK"
               printf '"sysupgrade_disk":"%s",' "$SYSUPGRADE_DISK"
+              printf '"keep_config":true,'
               printf '"target_guard":"ok"'
               printf '}\n'
           }
@@ -3325,6 +3472,8 @@ jobs:
                           data.sysupgrade_disk
                           +
                           "<br />目标保险锁：通过"
+                          +
+                          "<br />当前配置：默认保留"
                       );
                   }
               );
@@ -3336,6 +3485,7 @@ jobs:
               if (!confirm(
                   "正式开始升级？\n\n" +
                   "系统会在写盘前再次执行最终目标盘保护检查。\n\n" +
+                  "当前配置会默认保留（PassWall / PassWall2 / SmartDNS / AdGuard Home / dnsmasq 等）。\n\n" +
                   "升级期间不要断电。"
               ))
                   return;
@@ -3380,6 +3530,8 @@ jobs:
                           data.sysupgrade_disk
                           +
                           "<br />保险锁：通过"
+                          +
+                          "<br />当前配置：已按保留模式升级"
                           +
                           "<br /><br />设备即将自动重启。"
                       );
@@ -4275,8 +4427,28 @@ jobs:
           test -x files/usr/bin/doornet2-passwall-updater
           test -x files/usr/bin/doornet2-app-updater
           test -x files/etc/uci-defaults/97-doornet2-network-apps
+          test -f files/lib/upgrade/keep.d/doornet2-user-network-config
           sh -n files/usr/bin/doornet2-app-updater
           sh -n files/etc/uci-defaults/97-doornet2-network-apps
+
+          if [ -f files/etc/config/dhcp ]; then
+              if grep -q '127\.0\.0\.1#3053' files/etc/config/dhcp || \
+                 grep -Eq "option[[:space:]]+noresolv[[:space:]]+['\"]?1" files/etc/config/dhcp; then
+                  echo "ERROR: old forced dnsmasq -> AdGuard chain is still baked in"
+                  cat files/etc/config/dhcp
+                  exit 1
+              fi
+          fi
+
+          if find files -type f \
+              \( -name 'doornet2-dns-chain' -o -name 'passwall-delay' -o -name 'passwall2-delay' \) \
+              -print 2>/dev/null | grep -q .; then
+              echo "ERROR: old automatic DNS/proxy rewrite scripts are still present"
+              find files -type f \
+                \( -name 'doornet2-dns-chain' -o -name 'passwall-delay' -o -name 'passwall2-delay' \) \
+                -print
+              exit 1
+          fi
 
           echo "OK: DoorNet2 final configuration preflight passed."
 
@@ -4743,7 +4915,7 @@ jobs:
           set -e
 
           echo "========================================"
-          echo "DoorNet2 Final v1: full UI + online apps + runtime monitor build finished"
+          echo "DoorNet2 Final v2.1: user-managed apps + keep-config online upgrade build finished"
           echo "========================================"
 
           echo
@@ -4916,7 +5088,14 @@ jobs:
           sh -n files/usr/bin/doornet2-app-updater
 
           test -x files/etc/uci-defaults/97-doornet2-network-apps
+          test -f files/lib/upgrade/keep.d/doornet2-user-network-config
           sh -n files/etc/uci-defaults/97-doornet2-network-apps
+
+          grep -q '/etc/config/passwall' files/lib/upgrade/keep.d/doornet2-user-network-config
+          grep -q '/etc/config/passwall2' files/lib/upgrade/keep.d/doornet2-user-network-config
+          grep -q '/etc/config/smartdns' files/lib/upgrade/keep.d/doornet2-user-network-config
+          grep -q '/etc/adguardhome.yaml' files/lib/upgrade/keep.d/doornet2-user-network-config
+          grep -q '/etc/config/dhcp' files/lib/upgrade/keep.d/doornet2-user-network-config
 
           grep -nE \
             'luci-app-passwall2|smartdns|adguardhome|luci-app-smartdns' \
