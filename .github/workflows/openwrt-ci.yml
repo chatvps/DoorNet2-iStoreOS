@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build_openwrt:
-    name: Build DoorNet2 RK3399 Final Firmware v3.4 Stable Config Rebuild
+    name: Build DoorNet2 RK3399 Final Firmware v3.5 Proven Empty Config Rebuild
     # Proven host image used by the bootable R4 DoorNet2 build.
     runs-on: ubuntu-22.04
     timeout-minutes: 360
@@ -158,63 +158,55 @@ jobs:
 
           echo "OK: canonical DoorNet2 repository verified."
 
-      - name: Lock current repository to the proven R4 tracked build config
+      - name: Reproduce the proven R4 empty-config build path
         shell: bash
         run: |
           set -euo pipefail
 
-          # IMPORTANT: the bootable R4/V5.3.3 workflow did NOT replace .config
-          # with config/doornet2.config.  It built from the repository's tracked
-          # .config and only appended the DoorNet2/package selections before one
-          # final `make defconfig`.
+          # IMPORTANT CORRECTION:
+          # The real-device-proven R4/V5.3.3 workflow checked out the OpenWrt
+          # source and did not read/copy any pre-existing .config before its
+          # "Configure DoorNet2 and packages" step.  `cat >> .config` therefore
+          # CREATED a fresh .config, and `make defconfig` was run only after all
+          # DoorNet2/package selections had been appended.
           #
-          # v2.9-v3.3 changed that behavior and rebuilt .config from the vendor
-          # config first.  That produced a different 6.6.66 kernel ABI/config
-          # and the resulting firmware did not boot on the real DoorNet2.
+          # v2.9-v3.3 copied config/doornet2.config first.  That changed the
+          # 6.6.66 kernel configuration/ABI and those images did not boot on the
+          # real DoorNet2.  v3.4 then made the opposite mistake by requiring a
+          # tracked top-level .config that the proven workflow never required.
           R4_REFERENCE_COMMIT="9d1be44f0c1eaf3100ba122a966ff86b66354792"
+          R4_KERNEL_ABI="6.6.66-1-5569f718c35c6c044e99716c78d53804"
           ACTUAL_SOURCE_COMMIT="$(git rev-parse HEAD)"
-          SOURCE_MODE="current-repo-proven-tracked-config"
+          SOURCE_MODE="current-repo-proven-empty-config-path"
 
           echo "DOORNET2_SOURCE_BASELINE=${ACTUAL_SOURCE_COMMIT}" >> "$GITHUB_ENV"
           echo "DOORNET2_SOURCE_REPO=${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
           echo "DOORNET2_SOURCE_MODE=${SOURCE_MODE}" >> "$GITHUB_ENV"
           echo "DOORNET2_R4_REFERENCE=${R4_REFERENCE_COMMIT}" >> "$GITHUB_ENV"
+          echo "DOORNET2_R4_KERNEL_ABI=${R4_KERNEL_ABI}" >> "$GITHUB_ENV"
 
-          echo "===== SOURCE / PROVEN R4 CONFIG MODE ====="
+          echo "===== SOURCE / PROVEN R4 EMPTY-CONFIG MODE ====="
           echo "Repository      : ${GITHUB_REPOSITORY}"
-          echo "Current commit : ${ACTUAL_SOURCE_COMMIT}"
-          echo "R4 reference   : ${R4_REFERENCE_COMMIT} (known-good real-device baseline)"
-          echo "Mode           : ${SOURCE_MODE}"
+          echo "Current commit  : ${ACTUAL_SOURCE_COMMIT}"
+          echo "R4 reference    : ${R4_REFERENCE_COMMIT}"
+          echo "R4 kernel ABI   : ${R4_KERNEL_ABI}"
+          echo "Mode            : ${SOURCE_MODE}"
           git log -1 --oneline
 
           test -f target/linux/rockchip/image/armv8.mk
           grep -q 'define Device/embedfire_doornet2' target/linux/rockchip/image/armv8.mk
 
-          # The old proven workflow relied on a tracked top-level .config.
-          # Never silently fall back to config/doornet2.config: that is exactly
-          # the path that produced the non-booting v3.x kernels.
-          if ! git ls-files --error-unmatch .config >/dev/null 2>&1; then
-              echo "ERROR: repository does not contain the tracked top-level .config used by the proven R4 workflow."
-              echo "Refusing to build another unverified kernel from config/doornet2.config."
-              exit 1
-          fi
+          # Reproduce the proven workflow literally: start without .config.
+          # Never seed it from config/doornet2.config or any other vendor file.
+          rm -f .config
+          test ! -e .config
 
-          test -s .config || {
-              echo "ERROR: tracked .config is empty."
-              exit 1
-          }
-
-          BASE_CONFIG_SHA256="$(sha256sum .config | awk '{print $1}')"
-          echo "DOORNET2_BASE_CONFIG_SHA256=${BASE_CONFIG_SHA256}" >> "$GITHUB_ENV"
-          cp -f .config /tmp/doornet2-proven-base.config
-
-          echo "Tracked .config SHA256: ${BASE_CONFIG_SHA256}"
-          echo "===== BASE TARGET/KERNEL CONFIG SNAPSHOT ====="
-          grep -E '^(CONFIG_TARGET_|CONFIG_KERNEL_|CONFIG_PACKAGE_kmod-r8168=|CONFIG_PACKAGE_kmod-fs-ext4=)' .config | head -200 || true
+          # Guard against accidentally reintroducing the known-bad path later.
+          echo "PROVEN_EMPTY_CONFIG_READY=1" > /tmp/doornet2-proven-empty-config
 
           grep -RqsE '6\.6\.66|LINUX_VERSION[^=]*:?=[[:space:]]*6\.6\.66' include target 2>/dev/null || {
               echo "WARNING: 6.6.66 was not found literally in source metadata."
-              echo "The generated kernel audit later in this workflow is authoritative."
+              echo "The generated kernel ABI audit later in this workflow is authoritative."
           }
 
 
@@ -4665,13 +4657,12 @@ jobs:
         run: |
           set -e
 
-          # Keep the repository's tracked .config exactly as the proven R4
-          # workflow did.  Do NOT replace it with config/doornet2.config and do
-          # NOT run make defconfig before the DoorNet2/package selections below.
-          test -s .config
-          test -s /tmp/doornet2-proven-base.config
-          cmp -s .config /tmp/doornet2-proven-base.config || {
-              echo "ERROR: .config changed before package selection."
+          # Match the proven R4 workflow exactly at config-generation time:
+          # there must be NO .config yet.  This `cat >>` creates it from scratch.
+          test -f /tmp/doornet2-proven-empty-config
+          test ! -e .config || {
+              echo "ERROR: .config appeared before the proven package-selection step."
+              echo "Refusing to mix another base config into the R4 build path."
               exit 1
           }
 
@@ -5370,16 +5361,39 @@ jobs:
           print('OK: DoorNet2 DTB matches proven R4 exactly.')
           PY
 
-          echo "===== KERNEL ABI ====="
+          echo "===== STRICT R4 KERNEL ABI ====="
           ROOTFS_TAR="$(find ./bin/targets/rockchip/armv8 -maxdepth 1 -type f \
               \( -name '*embedfire_doornet2-rootfs.tar.gz' -o -name 'openwrt-rockchip-armv8-rootfs.tar.gz' \) | head -n 1)"
           [ -n "$ROOTFS_TAR" ] || { echo "ERROR: rootfs tar missing"; exit 1; }
-          tar -xOzf "$ROOTFS_TAR" ./usr/lib/opkg/status 2>/dev/null | \
-            awk 'BEGIN{p=0} /^Package: kernel$/{p=1} p && /^Version: /{print; exit}'
-          echo "Known-good R4 kernel ABI was: 6.6.66-1-5569f718c35c6c044e99716c78d53804"
-          echo "The new kernel/rootfs must use one internally matching ABI; the exact hash may change only if selected kmods change."
 
-          echo "OK: proven R4 boot-script and DTB invariants passed."
+          MANIFEST="$(find ./bin/targets/rockchip/armv8 -maxdepth 1 -type f \
+              -name '*embedfire_doornet2*.manifest' | head -n 1)"
+
+          KERNEL_VERSION=""
+          if [ -n "$MANIFEST" ]; then
+              KERNEL_VERSION="$(awk '$1 == "kernel" && $2 == "-" {print $3; exit}' "$MANIFEST")"
+          fi
+
+          if [ -z "$KERNEL_VERSION" ]; then
+              STATUS_PATH="$(tar -tzf "$ROOTFS_TAR" | grep -m1 -E '^(\./)?usr/lib/opkg/status$' || true)"
+              [ -n "$STATUS_PATH" ] || { echo "ERROR: usr/lib/opkg/status missing from rootfs tar"; exit 1; }
+              KERNEL_VERSION="$(tar -xOzf "$ROOTFS_TAR" "$STATUS_PATH" 2>/dev/null | \
+                awk 'BEGIN{p=0} /^Package: kernel$/{p=1; next} p && /^Version: /{sub(/^Version: /, ""); print; exit}')"
+          fi
+
+          [ -n "$KERNEL_VERSION" ] || { echo "ERROR: could not determine generated kernel ABI"; exit 1; }
+
+          echo "Generated kernel ABI : ${KERNEL_VERSION}"
+          echo "Required R4 ABI      : ${DOORNET2_R4_KERNEL_ABI}"
+
+          if [ "$KERNEL_VERSION" != "$DOORNET2_R4_KERNEL_ABI" ]; then
+              echo "ERROR: generated kernel ABI does not match the real-device-proven R4 kernel ABI."
+              echo "This build will NOT be published or offered for flashing."
+              exit 1
+          fi
+
+          echo "OK: kernel ABI exactly matches proven R4."
+          echo "OK: proven R4 boot-script, DTB, and kernel ABI invariants passed."
 
       - name: Prepare artifact
         run: |
@@ -6215,5 +6229,5 @@ jobs:
 
           echo
           echo "========================================"
-          echo "DOORNET2 FINAL V2.8 + MIGRATED R4 STABLE BASE + PASSWALL2 + NO-UU + TF-FIRST SUCCESS"
+          echo "DOORNET2 FINAL v3.5 + PROVEN R4 EMPTY-CONFIG PATH + EXACT ABI + PASSWALL2 + NO-UU SUCCESS"
           echo "========================================"
