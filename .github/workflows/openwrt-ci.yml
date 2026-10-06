@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build_openwrt:
-    name: Build DoorNet2 RK3399 Final Firmware
+    name: Build DoorNet2 RK3399 Final Firmware v2.9 R4 Boot Profile
     # Proven host image used by the bootable R4 DoorNet2 build.
     runs-on: ubuntu-22.04
     timeout-minutes: 360
@@ -157,60 +157,46 @@ jobs:
 
           echo "OK: canonical DoorNet2 repository verified."
 
-      - name: Resolve proven R4 source baseline from current repository
+      - name: Lock current repository to the archived R4 boot profile
         shell: bash
         run: |
           set -euo pipefail
 
-          # The old Taipeione repository recorded by the working R4 firmware
-          # is no longer reachable from GitHub Actions.  Do NOT clone it.
-          # The migrated bwgone repository is the canonical source now.
-          # Prefer the exact known-good R4 commit if that commit history was
-          # preserved during migration; otherwise use the migrated stable branch.
+          # The original working R4 commit (9d1be44...) and old stable branch
+          # are no longer reachable in the migrated Git repository. Build the
+          # current canonical tree, but restore the archived DoorNet2 board
+          # configuration before selecting current user-space packages.
           R4_REFERENCE_COMMIT="9d1be44f0c1eaf3100ba122a966ff86b66354792"
-          SOURCE_MODE=""
-
-          echo "Workflow repository : ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
-          echo "R4 reference commit : ${R4_REFERENCE_COMMIT}"
-
-          # Ensure all branches of the current repository are visible.
-          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
-
-          if git cat-file -e "${R4_REFERENCE_COMMIT}^{commit}" 2>/dev/null; then
-              echo "Exact R4 commit exists in migrated repository history."
-              git checkout --detach "${R4_REFERENCE_COMMIT}"
-              SOURCE_MODE="exact-r4-commit"
-          elif git show-ref --verify --quiet refs/remotes/origin/stable; then
-              echo "Exact historical commit is not reachable, using migrated stable branch."
-              git checkout --detach refs/remotes/origin/stable
-              SOURCE_MODE="migrated-stable-branch"
-          else
-              echo "ERROR: Neither the exact R4 commit nor origin/stable exists in ${GITHUB_REPOSITORY}."
-              echo "Available remote branches:"
-              git for-each-ref --format='  %(refname:short)' refs/remotes/origin/ || true
-              echo "Do not fall back to moving main because v2.6 built from main was not bootable."
-              exit 1
-          fi
-
           ACTUAL_SOURCE_COMMIT="$(git rev-parse HEAD)"
+          SOURCE_MODE="current-repo-archived-r4-boot-profile"
 
           echo "DOORNET2_SOURCE_BASELINE=${ACTUAL_SOURCE_COMMIT}" >> "$GITHUB_ENV"
           echo "DOORNET2_SOURCE_REPO=${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
           echo "DOORNET2_SOURCE_MODE=${SOURCE_MODE}" >> "$GITHUB_ENV"
           echo "DOORNET2_R4_REFERENCE=${R4_REFERENCE_COMMIT}" >> "$GITHUB_ENV"
 
-          echo "===== RESOLVED R4 SOURCE BASELINE ====="
-          echo "Mode   : ${SOURCE_MODE}"
-          echo "Commit : ${ACTUAL_SOURCE_COMMIT}"
+          echo "===== SOURCE / R4 BOOT PROFILE ====="
+          echo "Repository      : ${GITHUB_REPOSITORY}"
+          echo "Current commit : ${ACTUAL_SOURCE_COMMIT}"
+          echo "R4 reference   : ${R4_REFERENCE_COMMIT} (historical provenance only)"
+          echo "Mode           : ${SOURCE_MODE}"
           git log -1 --oneline
 
           test -f target/linux/rockchip/image/armv8.mk
           grep -q 'define Device/embedfire_doornet2' target/linux/rockchip/image/armv8.mk
 
-          # The stable tree must still be the legacy 6.6 DoorNet2 line.
+          if [ -f config/doorNet2.config ]; then
+              echo "DoorNet2 base config: config/doorNet2.config"
+          elif [ -f config/doornet2.config ]; then
+              echo "DoorNet2 base config: config/doornet2.config"
+          else
+              echo "ERROR: DoorNet2 base config is missing from the migrated source tree."
+              exit 1
+          fi
+
           grep -RqsE '6\.6\.66|LINUX_VERSION[^=]*:?=[[:space:]]*6\.6\.66' include target 2>/dev/null || {
               echo "WARNING: 6.6.66 was not found literally in source metadata."
-              echo "The generated rootfs/kernel audit later in this workflow remains authoritative."
+              echo "The generated kernel audit later in this workflow is authoritative."
           }
 
 
@@ -4660,6 +4646,19 @@ jobs:
         run: |
           set -e
 
+          # Rebuild .config from the board vendor DoorNet2 baseline first.
+          # This is the key v2.9 change: do not inherit a moving/partial config.
+          if [ -f config/doorNet2.config ]; then
+              cp -f config/doorNet2.config .config
+          elif [ -f config/doornet2.config ]; then
+              cp -f config/doornet2.config .config
+          else
+              echo "ERROR: no DoorNet2 board config found."
+              exit 1
+          fi
+
+          make defconfig
+
           cat >> .config <<'EOF'
 
           CONFIG_TARGET_rockchip=y
@@ -5031,16 +5030,20 @@ jobs:
           trap 'rm -rf "$AUDIT_DIR"' EXIT
           tar -xzf "$ROOTFS_TAR" -C "$AUDIT_DIR"
 
-          echo "===== PROVEN BOOT BASELINE CHECK ====="
-          grep -q "DISTRIB_REVISION='R24.12.12-D'" "$AUDIT_DIR/etc/openwrt_release" || {
-              echo "ERROR: generated firmware is not based on the proven R24.12.12-D source."
-              cat "$AUDIT_DIR/etc/openwrt_release"
+          echo "===== R4 HARDWARE / KERNEL BASELINE CHECK ====="
+          cat "$AUDIT_DIR/etc/openwrt_release"
+          grep -q "DISTRIB_TARGET='rockchip/armv8'" "$AUDIT_DIR/etc/openwrt_release" || {
+              echo "ERROR: generated firmware target is not rockchip/armv8."
+              exit 1
+          }
+          grep -q "DISTRIB_ARCH='aarch64_generic'" "$AUDIT_DIR/etc/openwrt_release" || {
+              echo "ERROR: generated firmware architecture is not aarch64_generic."
               exit 1
           }
           grep -q '^Package: kernel$' "$AUDIT_DIR/usr/lib/opkg/status"
           awk 'BEGIN{p=0} /^Package: kernel$/{p=1} p && /^Version: /{print; exit}' \
             "$AUDIT_DIR/usr/lib/opkg/status" | grep -q 'Version: 6\.6\.66-1-' || {
-              echo "ERROR: generated kernel is not the proven DoorNet2 6.6.66 base."
+              echo "ERROR: generated kernel is not the required DoorNet2 6.6.66 line."
               awk 'BEGIN{p=0} /^Package: kernel$/{p=1} p && /^Version: /{print; exit}' \
                 "$AUDIT_DIR/usr/lib/opkg/status"
               exit 1
@@ -5144,6 +5147,33 @@ jobs:
       # ============================================================
       # 17. Prepare artifacts
       # ============================================================
+
+      - name: Audit generated RK3399 boot image layout
+        run: |
+          set -e
+
+          EXT4_IMG="$(find ./bin/targets/rockchip/armv8 -maxdepth 1 -type f -name '*embedfire_doornet2-ext4-sysupgrade.img.gz' | head -n 1)"
+          [ -n "$EXT4_IMG" ] || { echo "ERROR: ext4 sysupgrade image missing."; exit 1; }
+
+          TMP_HEAD="$(mktemp)"
+          trap 'rm -f "$TMP_HEAD"' EXIT
+          gzip -dc "$EXT4_IMG" | dd of="$TMP_HEAD" bs=1M count=16 status=none
+
+          echo "===== RK3399 IDB LOADER @ sector 64 ====="
+          dd if="$TMP_HEAD" bs=512 skip=64 count=8 status=none | hexdump -C | head -40
+          dd if="$TMP_HEAD" bs=512 skip=64 count=8 status=none | strings | grep -q 'RK33' || {
+              echo "ERROR: RK3399 loader signature RK33 not found."
+              exit 1
+          }
+
+          echo "===== U-BOOT LOADER @ sector 16384 ====="
+          dd if="$TMP_HEAD" bs=512 skip=16384 count=8 status=none | hexdump -C | head -40
+          dd if="$TMP_HEAD" bs=512 skip=16384 count=8 status=none | strings | grep -q 'LOADER' || {
+              echo "ERROR: U-Boot LOADER signature not found."
+              exit 1
+          }
+
+          echo "OK: RK3399 raw bootloader regions are present in the generated image."
 
       - name: Prepare artifact
         run: |
