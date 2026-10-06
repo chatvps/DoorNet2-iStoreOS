@@ -585,14 +585,14 @@ jobs:
             files/etc/init.d/passwall-delay \
             files/etc/init.d/passwall2-delay \
             files/etc/uci-defaults/96-doornet2-passwall-shunt \
-            files/etc/uci-defaults/96-doornet2-shunt-presets \
-            files/etc/uci-defaults/97-doornet2-network-apps
+            files/etc/uci-defaults/zzza-doornet2-shunt-presets \
+            files/etc/uci-defaults/zzzb-doornet2-network-apps
 
           mkdir -p \
             files/etc/uci-defaults \
             files/lib/upgrade/keep.d
 
-          cat > files/etc/uci-defaults/97-doornet2-network-apps <<'EOF'
+          cat > files/etc/uci-defaults/zzzb-doornet2-network-apps <<'EOF'
           #!/bin/sh
 
           # This script is intentionally a FIRST-BOOT-ONLY default initializer.
@@ -678,8 +678,8 @@ jobs:
           exit 0
           EOF
 
-          chmod 755 files/etc/uci-defaults/97-doornet2-network-apps
-          sh -n files/etc/uci-defaults/97-doornet2-network-apps
+          chmod 755 files/etc/uci-defaults/zzzb-doornet2-network-apps
+          sh -n files/etc/uci-defaults/zzzb-doornet2-network-apps
 
           cat > files/lib/upgrade/keep.d/doornet2-user-network-config <<'EOF'
           # DoorNet2 user-managed network application settings.
@@ -716,7 +716,7 @@ jobs:
             files/etc/uci-defaults \
             files/lib/upgrade/keep.d
 
-          cat > files/etc/uci-defaults/96-doornet2-shunt-presets <<'EOF'
+          cat > files/etc/uci-defaults/zzza-doornet2-shunt-presets <<'EOF'
           #!/bin/sh
 
           # DoorNet2 preset rules are seeded once.  The marker is preserved by
@@ -781,6 +781,20 @@ jobs:
                   if [ "$(uci -q get passwall.myshunt.remarks)" = "分流总节点" ] && \
                      [ "$(uci -q get passwall.myshunt.protocol)" = "_shunt" ]; then
                       uci -q delete passwall.myshunt
+                  fi
+              fi
+
+              # PassWall2 ships an example SOCKS node plus an example shunt node.
+              # Remove only those untouched stock examples on a clean install so
+              # LuCI exposes one clean user-facing node named “分流总节点”.
+              if [ "$cfg" = "passwall2" ] && [ "$RETAINED" = "0" ]; then
+                  if [ "$(uci -q get passwall2.rulenode.remarks)" = "rulenode" ] && \
+                     [ "$(uci -q get passwall2.rulenode.protocol)" = "_shunt" ]; then
+                      uci -q delete passwall2.rulenode
+                  fi
+                  if [ "$(uci -q get passwall2.examplenode.remarks)" = "Example" ] && \
+                     [ "$(uci -q get passwall2.examplenode.address)" = "passwall2.github" ]; then
+                      uci -q delete passwall2.examplenode
                   fi
               fi
 
@@ -906,6 +920,21 @@ jobs:
                   uci -q set "$cfg.$SHUNT_ID.default_node=_direct"
               fi
 
+              # On a clean install, make the preloaded shunt node the selected
+              # main node while keeping the plugin itself disabled.  With its
+              # default_node set to direct and ordinary preset rows unbound,
+              # enabling the plugin before choosing proxy nodes remains safe.
+              if [ "$RETAINED" = "0" ]; then
+                  if [ "$cfg" = "passwall" ]; then
+                      uci -q set passwall.@global[0].node="$SHUNT_ID"
+                  elif [ "$cfg" = "passwall2" ]; then
+                      uci -q set passwall2.@global[0].node="$SHUNT_ID"
+                      uci -q set "$cfg.$SHUNT_ID.domainMatcher=hybrid"
+                      uci -q set "$cfg.$SHUNT_ID.write_ipset_direct=1"
+                      uci -q set "$cfg.$SHUNT_ID.enable_geoview_ip=0"
+                  fi
+              fi
+
               # Required direct rules are attached by default.  During retained
               # upgrades, preserve any explicit user choice already present.
               for pair in \
@@ -936,8 +965,8 @@ jobs:
           exit 0
           EOF
 
-          chmod 755 files/etc/uci-defaults/96-doornet2-shunt-presets
-          sh -n files/etc/uci-defaults/96-doornet2-shunt-presets
+          chmod 755 files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          sh -n files/etc/uci-defaults/zzza-doornet2-shunt-presets
 
           # Preserve the one-time seed marker so online upgrades never replay
           # the preset initializer over a user's later edits/selections.
@@ -950,6 +979,7 @@ jobs:
           echo "===== SHUNT PRESET POLICY ====="
           echo "PassWall:  preloaded 分流总节点, plugin still default OFF"
           echo "PassWall2: preloaded 分流总节点, plugin still default OFF"
+          echo "First-boot order: PassWall package defaults -> shunt presets -> OFF-state initializer"
           echo "Proxy service rules have no baked-in personal node IDs."
           echo "WeChat / QQ / Tencent + forced-direct rules default to direct."
           echo "UU-specific domains are not present."
@@ -4754,17 +4784,17 @@ jobs:
 
           test -x files/usr/bin/doornet2-passwall-updater
           test -x files/usr/bin/doornet2-app-updater
-          test -x files/etc/uci-defaults/97-doornet2-network-apps
+          test -x files/etc/uci-defaults/zzzb-doornet2-network-apps
           test -f files/lib/upgrade/keep.d/doornet2-user-network-config
           sh -n files/usr/bin/doornet2-app-updater
-          sh -n files/etc/uci-defaults/97-doornet2-network-apps
-          test -x files/etc/uci-defaults/96-doornet2-shunt-presets
-          sh -n files/etc/uci-defaults/96-doornet2-shunt-presets
-          grep -q 'seed_config passwall' files/etc/uci-defaults/96-doornet2-shunt-presets
-          grep -q 'seed_config passwall2' files/etc/uci-defaults/96-doornet2-shunt-presets
-          grep -q 'remarks=分流总节点' files/etc/uci-defaults/96-doornet2-shunt-presets
-          grep -q 'api.example.com,speedtest.net' files/etc/uci-defaults/96-doornet2-shunt-presets
-          if grep -Ei 'router\.uu\.163\.com|uu\.gdl\.netease\.com|uurouter\.gdl\.netease\.com' files/etc/uci-defaults/96-doornet2-shunt-presets; then
+          sh -n files/etc/uci-defaults/zzzb-doornet2-network-apps
+          test -x files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          sh -n files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          grep -q 'seed_config passwall' files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          grep -q 'seed_config passwall2' files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          grep -q 'remarks=分流总节点' files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          grep -q 'api.example.com,speedtest.net' files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          if grep -Ei 'router\.uu\.163\.com|uu\.gdl\.netease\.com|uurouter\.gdl\.netease\.com' files/etc/uci-defaults/zzza-doornet2-shunt-presets; then
               echo "ERROR: UU-specific domain leaked into shunt presets."
               exit 1
           fi
@@ -4926,7 +4956,7 @@ jobs:
               exit 1
           }
 
-          test -x "$AUDIT_DIR/etc/uci-defaults/97-doornet2-network-apps"
+          test -x "$AUDIT_DIR/etc/uci-defaults/zzzb-doornet2-network-apps"
           test -f "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
           grep -q '/etc/config/passwall' "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
           grep -q '/etc/config/passwall2' "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
@@ -4936,7 +4966,7 @@ jobs:
           grep -q '/etc/doornet2-shunt-presets-v1' "$AUDIT_DIR/lib/upgrade/keep.d/doornet2-user-network-config"
 
           echo "===== ROOTFS SHUNT PRESET CHECK ====="
-          SHUNT_PRESET="$AUDIT_DIR/etc/uci-defaults/96-doornet2-shunt-presets"
+          SHUNT_PRESET="$AUDIT_DIR/etc/uci-defaults/zzza-doornet2-shunt-presets"
           test -x "$SHUNT_PRESET"
           sh -n "$SHUNT_PRESET"
           grep -q 'seed_config passwall' "$SHUNT_PRESET"
@@ -5551,14 +5581,14 @@ jobs:
           test -x files/usr/bin/doornet2-app-updater
           sh -n files/usr/bin/doornet2-app-updater
 
-          test -x files/etc/uci-defaults/97-doornet2-network-apps
+          test -x files/etc/uci-defaults/zzzb-doornet2-network-apps
           test -f files/lib/upgrade/keep.d/doornet2-user-network-config
-          sh -n files/etc/uci-defaults/97-doornet2-network-apps
-          test -x files/etc/uci-defaults/96-doornet2-shunt-presets
-          sh -n files/etc/uci-defaults/96-doornet2-shunt-presets
-          grep -q 'seed_config passwall' files/etc/uci-defaults/96-doornet2-shunt-presets
-          grep -q 'seed_config passwall2' files/etc/uci-defaults/96-doornet2-shunt-presets
-          grep -q 'remarks=分流总节点' files/etc/uci-defaults/96-doornet2-shunt-presets
+          sh -n files/etc/uci-defaults/zzzb-doornet2-network-apps
+          test -x files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          sh -n files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          grep -q 'seed_config passwall' files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          grep -q 'seed_config passwall2' files/etc/uci-defaults/zzza-doornet2-shunt-presets
+          grep -q 'remarks=分流总节点' files/etc/uci-defaults/zzza-doornet2-shunt-presets
 
           grep -q '/etc/config/passwall' files/lib/upgrade/keep.d/doornet2-user-network-config
           grep -q '/etc/config/passwall2' files/lib/upgrade/keep.d/doornet2-user-network-config
