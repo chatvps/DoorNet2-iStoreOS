@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build_openwrt:
-    name: Build DoorNet2 RK3399 Final Firmware v2.9 R4 Boot Profile
+    name: Build DoorNet2 RK3399 Final Firmware v3.0 R4 Boot Profile Rootfs Audit Fix
     # Proven host image used by the bootable R4 DoorNet2 build.
     runs-on: ubuntu-22.04
     timeout-minutes: 360
@@ -4647,7 +4647,7 @@ jobs:
           set -e
 
           # Rebuild .config from the board vendor DoorNet2 baseline first.
-          # This is the key v2.9 change: do not inherit a moving/partial config.
+          # Keep the v2.9 R4-profile reset: do not inherit a moving/partial config.
           if [ -f config/doorNet2.config ]; then
               cp -f config/doorNet2.config .config
           elif [ -f config/doornet2.config ]; then
@@ -5014,17 +5014,29 @@ jobs:
         run: |
           set -e
 
+          # On this R4/OpenWrt tree the target emits a generic target rootfs tarball
+          # (openwrt-rockchip-armv8-rootfs.tar.gz), while the sysupgrade images are
+          # device-specific. Prefer a device-specific tarball if one ever exists,
+          # otherwise audit the generic rockchip/armv8 rootfs actually used to build
+          # the DoorNet2 image.
           ROOTFS_TAR="$(
             find ./bin/targets/rockchip/armv8 \
               -maxdepth 1 -type f \
-              -name '*embedfire_doornet2-rootfs.tar.gz' \
+              \( -name '*embedfire_doornet2-rootfs.tar.gz' \
+                 -o -name 'openwrt-rockchip-armv8-rootfs.tar.gz' \
+                 -o -name '*-rootfs.tar.gz' \) \
+              | sort \
               | head -n 1
           )"
 
           if [ -z "$ROOTFS_TAR" ]; then
-              echo "ERROR: generated DoorNet2 rootfs tarball not found."
+              echo "ERROR: generated rockchip/armv8 rootfs tarball not found."
+              echo "Files produced in target directory:"
+              find ./bin/targets/rockchip/armv8 -maxdepth 1 -type f -printf '%f\n' | sort
               exit 1
           fi
+
+          echo "Auditing rootfs tarball: $ROOTFS_TAR"
 
           AUDIT_DIR="$(mktemp -d)"
           trap 'rm -rf "$AUDIT_DIR"' EXIT
