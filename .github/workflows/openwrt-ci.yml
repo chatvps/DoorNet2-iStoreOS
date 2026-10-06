@@ -144,7 +144,7 @@ jobs:
         run: |
           set -e
 
-          EXPECTED_REPO="bwgone/DoorNet2-iStoreOS"
+          EXPECTED_REPO="chatvps/DoorNet2-iStoreOS"
 
           echo "Current repository:  ${GITHUB_REPOSITORY}"
           echo "Expected repository: ${EXPECTED_REPO}"
@@ -2573,7 +2573,7 @@ jobs:
 
           export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 
-          REPO="bwgone/DoorNet2-iStoreOS"
+          REPO="chatvps/DoorNet2-iStoreOS"
 
           BASE_URL="https://github.com/${REPO}/releases/latest/download"
 
@@ -5122,7 +5122,7 @@ jobs:
           fi
 
           echo "===== ROOTFS ONLINE-UPGRADE CHECK ====="
-          grep -q 'REPO="bwgone/DoorNet2-iStoreOS"' "$AUDIT_DIR/usr/bin/doornet2-updater"
+          grep -q 'REPO="chatvps/DoorNet2-iStoreOS"' "$AUDIT_DIR/usr/bin/doornet2-updater"
           grep -q 'keep_config.*true' "$AUDIT_DIR/usr/bin/doornet2-updater"
           if grep -Eq '/sbin/sysupgrade[[:space:]\\]*-n|sysupgrade[[:space:]]+-n' "$AUDIT_DIR/usr/bin/doornet2-updater"; then
               echo "ERROR: updater contains sysupgrade -n and would discard settings."
@@ -5130,13 +5130,13 @@ jobs:
           fi
 
           echo "===== ROOTFS REPOSITORY CHECK ====="
-          if grep -Rni 'chatvps/DoorNet2-iStoreOS' \
+          if grep -Rni 'bwgone/DoorNet2-iStoreOS' \
               "$AUDIT_DIR/etc" "$AUDIT_DIR/usr" 2>/dev/null; then
-              echo "ERROR: stale chatvps repository URL is baked into generated rootfs."
+              echo "ERROR: stale bwgone repository URL is baked into generated rootfs."
               exit 1
           fi
 
-          grep -q "DOORNET2_GITHUB_REPOSITORY='bwgone/DoorNet2-iStoreOS'" \
+          grep -q "DOORNET2_GITHUB_REPOSITORY='chatvps/DoorNet2-iStoreOS'" \
             "$AUDIT_DIR/etc/doornet2_release"
 
           echo "===== ROOTFS UU ABSENCE CHECK ====="
