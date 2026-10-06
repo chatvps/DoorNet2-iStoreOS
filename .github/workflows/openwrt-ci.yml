@@ -157,40 +157,61 @@ jobs:
 
           echo "OK: canonical DoorNet2 repository verified."
 
-      - name: Checkout proven R4 source baseline
+      - name: Resolve proven R4 source baseline from current repository
         shell: bash
         run: |
           set -euo pipefail
 
-          # This is the exact source commit reported by the user's known-good
-          # DoorNet2 R4 firmware (R24.12.12-D / kernel 6.6.66).  The workflow
-          # itself lives in bwgone/DoorNet2-iStoreOS, but firmware compilation
-          # must use this proven source tree instead of the moving main branch.
-          STABLE_SOURCE_COMMIT="9d1be44f0c1eaf3100ba122a966ff86b66354792"
-          STABLE_SOURCE_REPO="Taipeione/DoorNet2-iStoreOS"
+          # The old Taipeione repository recorded by the working R4 firmware
+          # is no longer reachable from GitHub Actions.  Do NOT clone it.
+          # The migrated bwgone repository is the canonical source now.
+          # Prefer the exact known-good R4 commit if that commit history was
+          # preserved during migration; otherwise use the migrated stable branch.
+          R4_REFERENCE_COMMIT="9d1be44f0c1eaf3100ba122a966ff86b66354792"
+          SOURCE_MODE=""
 
           echo "Workflow repository : ${GITHUB_REPOSITORY}@${GITHUB_SHA}"
-          echo "Firmware source     : ${STABLE_SOURCE_REPO}@${STABLE_SOURCE_COMMIT}"
+          echo "R4 reference commit : ${R4_REFERENCE_COMMIT}"
 
-          if ! git cat-file -e "${STABLE_SOURCE_COMMIT}^{commit}" 2>/dev/null; then
-              git remote remove doornet2-stable >/dev/null 2>&1 || true
-              git remote add doornet2-stable \
-                "https://github.com/${STABLE_SOURCE_REPO}.git"
-              git fetch --no-tags --depth 1 doornet2-stable "${STABLE_SOURCE_COMMIT}"
+          # Ensure all branches of the current repository are visible.
+          git fetch --prune origin '+refs/heads/*:refs/remotes/origin/*'
+
+          if git cat-file -e "${R4_REFERENCE_COMMIT}^{commit}" 2>/dev/null; then
+              echo "Exact R4 commit exists in migrated repository history."
+              git checkout --detach "${R4_REFERENCE_COMMIT}"
+              SOURCE_MODE="exact-r4-commit"
+          elif git show-ref --verify --quiet refs/remotes/origin/stable; then
+              echo "Exact historical commit is not reachable, using migrated stable branch."
+              git checkout --detach refs/remotes/origin/stable
+              SOURCE_MODE="migrated-stable-branch"
+          else
+              echo "ERROR: Neither the exact R4 commit nor origin/stable exists in ${GITHUB_REPOSITORY}."
+              echo "Available remote branches:"
+              git for-each-ref --format='  %(refname:short)' refs/remotes/origin/ || true
+              echo "Do not fall back to moving main because v2.6 built from main was not bootable."
+              exit 1
           fi
 
-          git checkout --detach "${STABLE_SOURCE_COMMIT}"
-
           ACTUAL_SOURCE_COMMIT="$(git rev-parse HEAD)"
-          test "${ACTUAL_SOURCE_COMMIT}" = "${STABLE_SOURCE_COMMIT}"
 
-          echo "DOORNET2_SOURCE_BASELINE=${STABLE_SOURCE_COMMIT}" >> "$GITHUB_ENV"
-          echo "DOORNET2_SOURCE_REPO=${STABLE_SOURCE_REPO}" >> "$GITHUB_ENV"
+          echo "DOORNET2_SOURCE_BASELINE=${ACTUAL_SOURCE_COMMIT}" >> "$GITHUB_ENV"
+          echo "DOORNET2_SOURCE_REPO=${GITHUB_REPOSITORY}" >> "$GITHUB_ENV"
+          echo "DOORNET2_SOURCE_MODE=${SOURCE_MODE}" >> "$GITHUB_ENV"
+          echo "DOORNET2_R4_REFERENCE=${R4_REFERENCE_COMMIT}" >> "$GITHUB_ENV"
 
-          echo "===== PROVEN SOURCE BASELINE ====="
+          echo "===== RESOLVED R4 SOURCE BASELINE ====="
+          echo "Mode   : ${SOURCE_MODE}"
+          echo "Commit : ${ACTUAL_SOURCE_COMMIT}"
           git log -1 --oneline
+
           test -f target/linux/rockchip/image/armv8.mk
           grep -q 'define Device/embedfire_doornet2' target/linux/rockchip/image/armv8.mk
+
+          # The stable tree must still be the legacy 6.6 DoorNet2 line.
+          grep -RqsE '6\.6\.66|LINUX_VERSION[^=]*:?=[[:space:]]*6\.6\.66' include target 2>/dev/null || {
+              echo "WARNING: 6.6.66 was not found literally in source metadata."
+              echo "The generated rootfs/kernel audit later in this workflow remains authoritative."
+          }
 
 
       # ============================================================
@@ -1768,6 +1789,8 @@ jobs:
           DOORNET2_GITHUB_REPOSITORY='${GITHUB_REPOSITORY}'
           DOORNET2_SOURCE_REPOSITORY='${DOORNET2_SOURCE_REPO}'
           DOORNET2_SOURCE_BASELINE='${DOORNET2_SOURCE_BASELINE}'
+          DOORNET2_SOURCE_MODE='${DOORNET2_SOURCE_MODE}'
+          DOORNET2_R4_REFERENCE='${DOORNET2_R4_REFERENCE}'
           DOORNET2_BOARD='embedfire,doornet2'
           DOORNET2_BOOT_MODE='tf-first-emmc-fallback'
           DOORNET2_STORAGE_FIX='no-extroot'
@@ -4969,8 +4992,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "9d1be44f0c1eaf3100ba122a966ff86b66354792"
-          echo "Source baseline locked: $(git rev-parse HEAD)"
+          test "$(git rev-parse HEAD)" = "${DOORNET2_SOURCE_BASELINE}"
+          echo "Source baseline locked: ${DOORNET2_SOURCE_BASELINE}"
+          echo "Source mode: ${DOORNET2_SOURCE_MODE}"
+          echo "R4 reference: ${DOORNET2_R4_REFERENCE}"
           grep -q '^CONFIG_TARGET_DEVICE_rockchip_armv8_DEVICE_embedfire_doornet2=y$' .config
           grep -q '^CONFIG_PACKAGE_luci-app-passwall_Iptables_Transparent_Proxy=y$' .config
           grep -q '^CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy=y$' .config
@@ -5020,7 +5045,9 @@ jobs:
                 "$AUDIT_DIR/usr/lib/opkg/status"
               exit 1
           }
-          grep -q "DOORNET2_SOURCE_BASELINE='9d1be44f0c1eaf3100ba122a966ff86b66354792'" \
+          grep -q "DOORNET2_SOURCE_BASELINE='${DOORNET2_SOURCE_BASELINE}'" \
+            "$AUDIT_DIR/etc/doornet2_release"
+          grep -q "DOORNET2_R4_REFERENCE='9d1be44f0c1eaf3100ba122a966ff86b66354792'" \
             "$AUDIT_DIR/etc/doornet2_release"
           grep -q "DOORNET2_BOOT_MODE='tf-first-emmc-fallback'" \
             "$AUDIT_DIR/etc/doornet2_release"
@@ -5952,5 +5979,5 @@ jobs:
 
           echo
           echo "========================================"
-          echo "DOORNET2 FINAL V2.7 + PROVEN R4 BOOT BASE + PASSWALL2 + NO-UU + TF-FIRST SUCCESS"
+          echo "DOORNET2 FINAL V2.8 + MIGRATED R4 STABLE BASE + PASSWALL2 + NO-UU + TF-FIRST SUCCESS"
           echo "========================================"
