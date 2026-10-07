@@ -1,4 +1,5 @@
-name: DoorNet2-V0.1
+name: V1.0
+run-name: V1.0
 
 on:
   workflow_dispatch:
@@ -228,8 +229,8 @@ jobs:
           BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
           # DoorNet2 project version. Start the new version line from V0.1.
-          VERSION="V0.1"
-          TAG="V0.1"
+          VERSION="V1.0"
+          TAG="V1.0"
 
           echo "DOORNET2_VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "DOORNET2_TAG=${TAG}" >> "$GITHUB_ENV"
@@ -5006,25 +5007,19 @@ jobs:
           grep -q '^CONFIG_PACKAGE_luci-app-passwall_Iptables_Transparent_Proxy=y$' .config
           grep -q '^CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy=y$' .config
 
-      - name: Lock R4 U-Boot
+      - name: Verify R4 U-Boot asset
         shell: bash
         run: |
           set -euo pipefail
 
           ASSET="${GITHUB_WORKSPACE}/r4.bin.gz"
           EXPECTED_PATCH_SHA="6cd741e71a65802062ecf134d1dd5f33269c02ccea90a203231a84bdcc7d228a"
-          EXPECTED_HEAD32_SHA="1f10125d602a6ac4a77e4fc136c53f94cd4501730c47a0f60c0b651cfd1e7a04"
-
-          # pine64-img writes u-boot-rockchip.bin into the final image at 32 KiB.
-          # Proven R4 and current source are byte-identical everywhere in the first
-          # 32 MiB except final-image 8..12 MiB.  Inside u-boot-rockchip.bin that
-          # exact region begins 32 KiB earlier.
-          PATCH_OFFSET=$((8 * 1024 * 1024 - 32 * 1024))
 
           test -f "$ASSET" || {
               echo "ERROR: proven R4 U-Boot asset missing: $ASSET"
               exit 1
           }
+
           gzip -t "$ASSET"
 
           PATCH_BIN="$(mktemp)"
@@ -5032,45 +5027,12 @@ jobs:
           gzip -dc "$ASSET" > "$PATCH_BIN"
 
           test "$(stat -c%s "$PATCH_BIN")" -eq $((4 * 1024 * 1024)) || {
-              echo "ERROR: proven U-Boot patch must be exactly 4 MiB."
+              echo "ERROR: proven R4 U-Boot region must be exactly 4 MiB."
               exit 1
           }
+
           echo "${EXPECTED_PATCH_SHA}  ${PATCH_BIN}" | sha256sum -c -
-
-          echo "===== BUILD SELECTED U-BOOT VARIANT FIRST ====="
-          make package/boot/uboot-rockchip/compile -j"$(nproc)" || \
-            make package/boot/uboot-rockchip/compile -j1 V=s
-
-          echo "===== LOCATE RK3399 / NANOPI-R4SE U-BOOT OUTPUTS ====="
-          mapfile -t CANDIDATES < <(
-            find build_dir staging_dir -type f \
-              \( -name 'u-boot-rockchip.bin' -o -name '*-u-boot-rockchip.bin' \) \
-              -size +12M 2>/dev/null | sort -u
-          )
-
-          PATCHED=0
-          for f in "${CANDIDATES[@]}"; do
-              if grep -aEq 'NanoPi R4SE|nanopi-r4se' "$f" 2>/dev/null; then
-                  echo "Patching selected R4SE U-Boot output: $f"
-                  dd if="$PATCH_BIN" of="$f" bs=1 seek="$PATCH_OFFSET" conv=notrunc status=none
-                  grep -aFq 'U-Boot 2024.04-OpenWrt-r0-9d1be44' "$f" || {
-                      echo "ERROR: patched U-Boot does not expose proven 9d1be44 version."
-                      exit 1
-                  }
-                  PATCHED=$((PATCHED + 1))
-              fi
-          done
-
-          if [ "$PATCHED" -lt 1 ]; then
-              echo "ERROR: no built NanoPi R4SE/RK3399 u-boot-rockchip.bin was found to lock."
-              find build_dir staging_dir -type f \
-                \( -name 'u-boot-rockchip.bin' -o -name '*-u-boot-rockchip.bin' \) \
-                -printf '%p %s bytes\n' 2>/dev/null | sort || true
-              exit 1
-          fi
-
-          echo "Patched U-Boot outputs: $PATCHED"
-          echo "Expected final first-32MiB SHA256: $EXPECTED_HEAD32_SHA"
+          echo "OK: proven R4 U-Boot asset verified."
 
       - name: Compile firmware
         run: |
@@ -5082,6 +5044,79 @@ jobs:
           find ./bin/targets/ \
             -type f \
             | sort
+
+      - name: Patch final image with R4 U-Boot
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ASSET="${GITHUB_WORKSPACE}/r4.bin.gz"
+          EXPECTED_PATCH_SHA="6cd741e71a65802062ecf134d1dd5f33269c02ccea90a203231a84bdcc7d228a"
+          EXPECTED_HEAD32_SHA="1f10125d602a6ac4a77e4fc136c53f94cd4501730c47a0f60c0b651cfd1e7a04"
+
+          PATCH_BIN="$(mktemp)"
+          trap 'rm -f "$PATCH_BIN"' EXIT
+          gzip -dc "$ASSET" > "$PATCH_BIN"
+          echo "${EXPECTED_PATCH_SHA}  ${PATCH_BIN}" | sha256sum -c -
+
+          mapfile -t IMAGES < <(
+            find ./bin/targets/rockchip/armv8 \
+              -maxdepth 1 -type f \
+              -name '*embedfire_doornet2-*-sysupgrade.img.gz' \
+              | sort
+          )
+
+          [ "${#IMAGES[@]}" -gt 0 ] || {
+              echo "ERROR: no DoorNet2 sysupgrade images were generated."
+              exit 1
+          }
+
+          for IMG_GZ in "${IMAGES[@]}"; do
+              echo "Patching final image: $IMG_GZ"
+
+              RAW="$(mktemp)"
+              NEW_GZ="${IMG_GZ}.new"
+              gzip -dc "$IMG_GZ" > "$RAW"
+
+              test "$(stat -c%s "$RAW")" -gt $((12 * 1024 * 1024)) || {
+                  echo "ERROR: generated image is unexpectedly smaller than 12 MiB: $IMG_GZ"
+                  rm -f "$RAW" "$NEW_GZ"
+                  exit 1
+              }
+
+              # r4.bin.gz is the exact, real-device-proven 8..12 MiB region
+              # from the working 9d1be44 R4 image.  Patch ONLY that region.
+              # Kernel, DTB, rootfs and all package data remain from this build.
+              dd if="$PATCH_BIN" of="$RAW" bs=1M seek=8 conv=notrunc status=none
+
+              REGION_SHA="$(
+                dd if="$RAW" bs=1M skip=8 count=4 iflag=fullblock status=none \
+                  | sha256sum | awk '{print $1}'
+              )"
+              test "$REGION_SHA" = "$EXPECTED_PATCH_SHA" || {
+                  echo "ERROR: patched 8..12 MiB R4 U-Boot region verification failed."
+                  rm -f "$RAW" "$NEW_GZ"
+                  exit 1
+              }
+
+              HEAD32_SHA="$(
+                dd if="$RAW" bs=1M count=32 iflag=fullblock status=none \
+                  | sha256sum | awk '{print $1}'
+              )"
+              echo "First 32 MiB SHA256: $HEAD32_SHA"
+              test "$HEAD32_SHA" = "$EXPECTED_HEAD32_SHA" || {
+                  echo "ERROR: first 32 MiB still differs from the proven R4 boot area."
+                  rm -f "$RAW" "$NEW_GZ"
+                  exit 1
+              }
+
+              gzip -n -c "$RAW" > "$NEW_GZ"
+              gzip -t "$NEW_GZ"
+              mv -f "$NEW_GZ" "$IMG_GZ"
+              rm -f "$RAW"
+          done
+
+          echo "OK: all DoorNet2 final images now contain the exact proven R4 boot area."
 
       - name: Audit generated rootfs before publishing
         run: |
@@ -5472,7 +5507,7 @@ jobs:
           if [ "$KERNEL_VERSION" != "$DOORNET2_R4_KERNEL_ABI" ]; then
               echo "NOTICE: kernel package ABI hash differs from historical R4."
               echo "This hash changes when built-in kernel-module/package selections change."
-              echo "v3.6 therefore treats it as diagnostic information, not a bootability verdict."
+              echo "The V0.1 workflow treats it as diagnostic information, not a bootability verdict."
           else
               echo "OK: kernel ABI hash exactly matches historical R4."
           fi
@@ -5773,7 +5808,7 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: DN2-V0.1
+          name: V1.0
           path: ./artifact/firmware/
           retention-days: 30
 
@@ -5781,7 +5816,7 @@ jobs:
       - name: Upload release files
         uses: actions/upload-artifact@v4
         with:
-          name: DN2-V0.1-release
+          name: V1.0-release
           path: ./artifact/release/
           retention-days: 30
 
@@ -6348,5 +6383,5 @@ jobs:
 
           echo
           echo "========================================"
-          echo "DOORNET2 FINAL v3.8 + PROVEN R4 U-BOOT + COHERENT KERNEL + PASSWALL2 + NO-UU SUCCESS"
+          echo "V1.0 build success"
           echo "========================================"
