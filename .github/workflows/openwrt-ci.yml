@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build_openwrt:
-    name: Build DoorNet2 RK3399 Final Firmware v3.6 Proven R4 Boot Rebuild
+    name: Build DoorNet2 RK3399 Final Firmware v3.7 Proven R4 U-Boot Lock
     # Proven host image used by the bootable R4 DoorNet2 build.
     runs-on: ubuntu-22.04
     timeout-minutes: 360
@@ -1786,6 +1786,7 @@ jobs:
           DOORNET2_SOURCE_REPOSITORY='${DOORNET2_SOURCE_REPO}'
           DOORNET2_SOURCE_BASELINE='${DOORNET2_SOURCE_BASELINE}'
           DOORNET2_SOURCE_MODE='${DOORNET2_SOURCE_MODE}'
+          DOORNET2_BOOTLOADER='r4-9d1be44-exact-uboot-region'
           DOORNET2_BASE_CONFIG_SHA256='${DOORNET2_BASE_CONFIG_SHA256}'
           DOORNET2_R4_REFERENCE='${DOORNET2_R4_REFERENCE}'
           DOORNET2_BOARD='embedfire,doornet2'
@@ -5006,6 +5007,72 @@ jobs:
           grep -q '^CONFIG_PACKAGE_luci-app-passwall_Iptables_Transparent_Proxy=y$' .config
           grep -q '^CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy=y$' .config
 
+      - name: Lock proven R4 U-Boot before image assembly
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          ASSET="${GITHUB_WORKSPACE}/.github/boot-assets/r4-uboot-9d1be44-8m-4m.bin.gz"
+          EXPECTED_PATCH_SHA="6cd741e71a65802062ecf134d1dd5f33269c02ccea90a203231a84bdcc7d228a"
+          EXPECTED_HEAD32_SHA="1f10125d602a6ac4a77e4fc136c53f94cd4501730c47a0f60c0b651cfd1e7a04"
+
+          # pine64-img writes u-boot-rockchip.bin into the final image at 32 KiB.
+          # Proven R4 and current source are byte-identical everywhere in the first
+          # 32 MiB except final-image 8..12 MiB.  Inside u-boot-rockchip.bin that
+          # exact region begins 32 KiB earlier.
+          PATCH_OFFSET=$((8 * 1024 * 1024 - 32 * 1024))
+
+          test -f "$ASSET" || {
+              echo "ERROR: proven R4 U-Boot asset missing: $ASSET"
+              exit 1
+          }
+          gzip -t "$ASSET"
+
+          PATCH_BIN="$(mktemp)"
+          trap 'rm -f "$PATCH_BIN"' EXIT
+          gzip -dc "$ASSET" > "$PATCH_BIN"
+
+          test "$(stat -c%s "$PATCH_BIN")" -eq $((4 * 1024 * 1024)) || {
+              echo "ERROR: proven U-Boot patch must be exactly 4 MiB."
+              exit 1
+          }
+          echo "${EXPECTED_PATCH_SHA}  ${PATCH_BIN}" | sha256sum -c -
+
+          echo "===== BUILD SELECTED U-BOOT VARIANT FIRST ====="
+          make package/boot/uboot-rockchip/compile -j"$(nproc)" || \
+            make package/boot/uboot-rockchip/compile -j1 V=s
+
+          echo "===== LOCATE RK3399 / NANOPI-R4SE U-BOOT OUTPUTS ====="
+          mapfile -t CANDIDATES < <(
+            find build_dir staging_dir -type f \
+              \( -name 'u-boot-rockchip.bin' -o -name '*-u-boot-rockchip.bin' \) \
+              -size +12M 2>/dev/null | sort -u
+          )
+
+          PATCHED=0
+          for f in "${CANDIDATES[@]}"; do
+              if strings "$f" 2>/dev/null | grep -Eq 'NanoPi R4SE|nanopi-r4se'; then
+                  echo "Patching selected R4SE U-Boot output: $f"
+                  dd if="$PATCH_BIN" of="$f" bs=1 seek="$PATCH_OFFSET" conv=notrunc status=none
+                  strings "$f" | grep -q 'U-Boot 2024.04-OpenWrt-r0-9d1be44' || {
+                      echo "ERROR: patched U-Boot does not expose proven 9d1be44 version."
+                      exit 1
+                  }
+                  PATCHED=$((PATCHED + 1))
+              fi
+          done
+
+          if [ "$PATCHED" -lt 1 ]; then
+              echo "ERROR: no built NanoPi R4SE/RK3399 u-boot-rockchip.bin was found to lock."
+              find build_dir staging_dir -type f \
+                \( -name 'u-boot-rockchip.bin' -o -name '*-u-boot-rockchip.bin' \) \
+                -printf '%p %s bytes\n' 2>/dev/null | sort || true
+              exit 1
+          fi
+
+          echo "Patched U-Boot outputs: $PATCHED"
+          echo "Expected final first-32MiB SHA256: $EXPECTED_HEAD32_SHA"
+
       - name: Compile firmware
         run: |
           make -j$(nproc) || \
@@ -5175,6 +5242,20 @@ jobs:
 
           EXT4_IMG="$(find ./bin/targets/rockchip/armv8 -maxdepth 1 -type f -name '*embedfire_doornet2-ext4-sysupgrade.img.gz' | head -n 1)"
           [ -n "$EXT4_IMG" ] || { echo "ERROR: ext4 sysupgrade image missing."; exit 1; }
+
+          echo "===== EXACT PROVEN R4 RAW BOOTLOADER CHECK ====="
+          HEAD32_SHA="$(
+            gzip -dc "$EXT4_IMG" 2>/dev/null \
+              | dd bs=1M count=32 iflag=fullblock status=none \
+              | sha256sum \
+              | awk '{print $1}'
+          )"
+          echo "Generated first 32 MiB: $HEAD32_SHA"
+          test "$HEAD32_SHA" = "1f10125d602a6ac4a77e4fc136c53f94cd4501730c47a0f60c0b651cfd1e7a04" || {
+              echo "ERROR: final image does not contain the exact real-device-proven R4 bootloader area."
+              exit 1
+          }
+          echo "OK: final first 32 MiB exactly matches the proven 9d1be44 R4 image."
 
           TMP_HEAD="$(mktemp)"
           trap 'rm -f "$TMP_HEAD"' EXIT
@@ -6268,5 +6349,5 @@ jobs:
 
           echo
           echo "========================================"
-          echo "DOORNET2 FINAL v3.6 + PROVEN R4 BOOT PATH + COHERENT KERNEL + PASSWALL2 + NO-UU SUCCESS"
+          echo "DOORNET2 FINAL v3.7 + PROVEN R4 U-BOOT + COHERENT KERNEL + PASSWALL2 + NO-UU SUCCESS"
           echo "========================================"
