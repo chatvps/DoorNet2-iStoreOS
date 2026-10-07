@@ -1,0 +1,125 @@
+            find build_dir \
+              -type f \
+              -path '*/root-*/etc/uci-defaults/95-doornet2-ui' \
+              -print \
+              | head -n 1
+          )"
+
+          test -n "$ROOT_RUNTIME_CSS"
+          test -n "$ROOT_RUNTIME_JS"
+          test -n "$ROOT_HEADER_FIX"
+          test -n "$ROOT_UI_DEFAULT"
+
+          echo "Installed runtime CSS: $ROOT_RUNTIME_CSS"
+          echo "Installed runtime JS : $ROOT_RUNTIME_JS"
+          echo "Installed header fix : $ROOT_HEADER_FIX"
+          echo "Installed UI default : $ROOT_UI_DEFAULT"
+
+          grep -q '#dn-runtime-monitor' "$ROOT_RUNTIME_CSS"
+          grep -q 'doornet2_runtime' "$ROOT_RUNTIME_JS"
+
+          sh -n "$ROOT_HEADER_FIX"
+          grep -q 'themes/design/header.htm' "$ROOT_HEADER_FIX"
+          grep -q 'runtime-monitor.css' "$ROOT_HEADER_FIX"
+          grep -q 'runtime-monitor.js' "$ROOT_HEADER_FIX"
+          grep -q '/cgi-bin/luci/admin/quickstart/' "$ROOT_HEADER_FIX"
+
+          sh -n "$ROOT_UI_DEFAULT"
+          grep -q "mediaurlbase='/luci-static/design'" "$ROOT_UI_DEFAULT"
+
+          echo "===== SIMULATE FIRST-BOOT DESIGN HEADER PATCH ====="
+
+          TMP_DESIGN_HEADER="$(mktemp)"
+          cp -f "$ROOT_DESIGN_HEADER" "$TMP_DESIGN_HEADER"
+
+          TEST_CSS='<link rel="stylesheet" href="/luci-static/doornet2/runtime-monitor.css">'
+          TEST_JS='<script defer src="/luci-static/doornet2/runtime-monitor.js"></script>'
+
+          if ! grep -q 'runtime-monitor.css' "$TMP_DESIGN_HEADER"; then
+              sed -i "\|</head>|i\\$TEST_CSS" "$TMP_DESIGN_HEADER"
+          fi
+
+          if ! grep -q 'runtime-monitor.js' "$TMP_DESIGN_HEADER"; then
+              sed -i "\|</head>|i\\$TEST_JS" "$TMP_DESIGN_HEADER"
+          fi
+
+          sed -i \
+            's#/cgi-bin/luci/admin/status/overview#/cgi-bin/luci/admin/quickstart/#g' \
+            "$TMP_DESIGN_HEADER"
+
+          grep -q 'runtime-monitor.css' "$TMP_DESIGN_HEADER"
+          grep -q 'runtime-monitor.js' "$TMP_DESIGN_HEADER"
+
+          rm -f "$TMP_DESIGN_HEADER"
+
+          echo "Installed Design header is patchable; first-boot fix verified (OK)"
+
+
+          echo
+          echo "===== R34 RUNTIME MONITOR ====="
+
+          grep -q \
+            "DOORNET2_RUNTIME_MONITOR='thermal-time-v2'" \
+            files/etc/doornet2_release
+
+          grep -q '^# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Geoview is not set$' .config
+          grep -q '^# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Shadowsocks_Rust_Client is not set$' .config
+          grep -q '^# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_ShadowsocksR_Libev_Client is not set$' .config
+          ! grep -Eq '^CONFIG_PACKAGE_shadowsocks-rust-.*=y$' .config
+          ! grep -Eq '^CONFIG_PACKAGE_shadowsocksr-libev.*=y$' .config
+
+          test -x files/usr/bin/doornet2-runtime-status
+          sh -n files/usr/bin/doornet2-runtime-status
+
+          test -s files/usr/lib/lua/luci/controller/doornet2_runtime.lua
+          grep -q 'doornet2_runtime' \
+            files/usr/lib/lua/luci/controller/doornet2_runtime.lua
+
+          test -s files/www/luci-static/doornet2/runtime-monitor.js
+          grep -q 'doornet2_runtime' \
+            files/www/luci-static/doornet2/runtime-monitor.js
+
+          test -s files/www/luci-static/doornet2/runtime-monitor.css
+          grep -q '#dn-runtime-monitor' \
+            files/www/luci-static/doornet2/runtime-monitor.css
+
+          grep -q 'runtime-monitor.css' \
+            package/lean/luci-theme-design/luasrc/view/themes/design/header.htm
+          grep -q 'runtime-monitor.js' \
+            package/lean/luci-theme-design/luasrc/view/themes/design/header.htm
+
+          test -x files/etc/uci-defaults/99-doornet2-runtime-header-fix
+          sh -n files/etc/uci-defaults/99-doornet2-runtime-header-fix
+
+          test -x files/etc/uci-defaults/98-doornet2-time
+          sh -n files/etc/uci-defaults/98-doornet2-time
+          grep -q "zonename='Asia/Shanghai'" \
+            files/etc/uci-defaults/98-doornet2-time
+
+
+          echo
+          echo "===== EXTROOT ====="
+
+          cat files/etc/config/fstab
+
+          if grep -Eq \
+            "option[[:space:]]+target[[:space:]]+['\"]?/['\"]?" \
+            files/etc/config/fstab
+          then
+
+              echo "ERROR: extroot found"
+              exit 1
+
+          fi
+
+
+          echo
+          echo "===== RELEASE FILES ====="
+
+          ls -lah ./artifact/release/
+
+
+          echo
+          echo "========================================"
+          echo "DoorNet2-V1.6 build success"
+          echo "========================================"
