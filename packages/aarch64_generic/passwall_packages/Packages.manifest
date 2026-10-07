@@ -1,0 +1,154 @@
+Package: chinadns-ng
+Version: 2025.08.09-1
+Depends: libc
+Source: feeds/passwall_packages/chinadns-ng
+SourceName: chinadns-ng
+License: AGPL-3.0-only
+LicenseFiles: LICENSE
+Section: net
+SourceDateEpoch: 1791290483
+Maintainer: sbwml <admin@cooluc.com>
+Architecture: aarch64_generic
+Installed-Size: 287132
+Filename: chinadns-ng_2025.08.09-1_aarch64_generic.ipk
+Size: 287073
+SHA256sum: daca1275f090adcbf08d0f2a625146889f4713bf82025ce4caddaa80969611bf
+Description:  ChinaDNS next generation, refactoring with epoll and ipset.
+
+Package: dns2socks
+Version: 2.1-2
+Depends: libc, libpthread
+Source: feeds/passwall_packages/dns2socks
+SourceName: dns2socks
+License: BSD-3-Clause
+Section: net
+SourceDateEpoch: 1791290483
+Maintainer: ghostmaker
+Architecture: aarch64_generic
+Installed-Size: 11259
+Filename: dns2socks_2.1-2_aarch64_generic.ipk
+Size: 11895
+SHA256sum: 5e0c5f07a2f221e64b140e634dfc9c8a6c3ca667d1a127d6ec1bbfdc9eb8788a
+Description:  This is a command line utility to resolve DNS requests via
+ a SOCKS tunnel like Tor or a HTTP proxy.
+
+Package: ipt2socks
+Version: 1.1.4-3
+Depends: libc, libpthread
+Source: feeds/passwall_packages/ipt2socks
+SourceName: ipt2socks
+License: AGPL-3.0
+Section: net
+SourceDateEpoch: 1791290483
+Architecture: aarch64_generic
+Installed-Size: 25987
+Filename: ipt2socks_1.1.4-3_aarch64_generic.ipk
+Size: 26575
+SHA256sum: cf6443d8036ffd210390ec2bf8c1427f759c4d878082bb985e559e8f165d485d
+Description:  Utility for converting iptables (redirect/tproxy) to socks5.
+
+Package: microsocks
+Version: 1.0.5-2
+Depends: libc, libpthread
+Source: feeds/passwall_packages/microsocks
+SourceName: microsocks
+License: MIT
+LicenseFiles: COPYING
+Section: net
+SourceDateEpoch: 1791290483
+Maintainer: lean
+Architecture: aarch64_generic
+Installed-Size: 8013
+Filename: microsocks_1.0.5-2_aarch64_generic.ipk
+Size: 8746
+SHA256sum: 78b4483ec136998d3edee4e38cc9513ec1656d32613072f105f5d50d5cd54445
+Description:  A SOCKS5 service that you can run on your remote boxes to tunnel connections
+ through them, if for some reason SSH doesn't cut it for you.
+ This version supports forwarding rules.
+
+Package: simple-obfs-client
+Version: 0.0.5-3
+Depends: libc, libpthread, libev
+Provides: simple-obfs
+Source: feeds/passwall_packages/simple-obfs
+SourceName: simple-obfs-client
+License: GPL-3.0-or-later
+LicenseFiles: LICENSE
+Section: net
+SourceDateEpoch: 1791290483
+Maintainer: Jian Chang <aa65535@live.com>
+Architecture: aarch64_generic
+Installed-Size: 31745
+Filename: simple-obfs-client_0.0.5-3_aarch64_generic.ipk
+Size: 32222
+SHA256sum: e1937d552fba2234634566d751ca470097d7871eb36d540efeec77ba62105219
+Description:  Simple-obfs is a simple obfusacting tool, designed as plugin server of shadowsocks.
+
+Package: tcping
+Version: 0.3-1
+Depends: libc
+Source: feeds/passwall_packages/tcping
+SourceName: tcping
+License: GPL-2.0-only
+LicenseFiles: license.txt
+Section: net
+SourceDateEpoch: 1791290483
+Architecture: aarch64_generic
+Installed-Size: 3709
+Filename: tcping_0.3-1_aarch64_generic.ipk
+Size: 4282
+SHA256sum: 4c2467f2680f5f5729edd735bb8e0d39b07e51359463b5e1325cf18ce0cfd72d
+Description:  tcping measures the latency of a tcp-connection
+
+Package: v2ray-geoip
+Version: 202609240030.1
+Depends: libc
+Source: feeds/passwall_packages/v2ray-geodata
+SourceName: v2ray-geoip
+License: CC-BY-SA-4.0
+LicenseFiles: LICENSE
+Section: net
+SourceDateEpoch: 1791290483
+Maintainer: Tianling Shen <cnsztl@immortalwrt.org>
+Architecture: all
+Installed-Size: 3702969
+Filename: v2ray-geoip_202609240030.1_all.ipk
+Size: 3452898
+SHA256sum: 4aa15f5d57214851deb2c5236ac5fdedf0bc7822c9a813a05a9cd5bccf12c39b
+Description:  GeoIP List for V2Ray
+
+Package: v2ray-geosite
+Version: 202609292207.1
+Depends: libc
+Source: feeds/passwall_packages/v2ray-geodata
+SourceName: v2ray-geosite
+License: MIT
+LicenseFiles: LICENSE
+Section: net
+SourceDateEpoch: 1791290483
+Maintainer: Tianling Shen <cnsztl@immortalwrt.org>
+Architecture: all
+Installed-Size: 3599808
+Filename: v2ray-geosite_202609292207.1_all.ipk
+Size: 3599936
+SHA256sum: 2510a5ac7dd98984c76ee4ac736fc0ab218906f624189df73111fcb160b4a406
+Description:  Geosite List for V2Ray
+
+Package: xray-core
+Version: 25.1.30-1
+Depends: libc, ca-bundle
+Source: feeds/passwall_packages/xray-core
+SourceName: xray-core
+License: MPL-2.0
+LicenseFiles: LICENSE
+Section: net
+SourceDateEpoch: 1791290483
+Maintainer: Tianling Shen <cnsztl@immortalwrt.org>
+Architecture: aarch64_generic
+Installed-Size: 9862755
+Filename: xray-core_25.1.30-1_aarch64_generic.ipk
+Size: 9831748
+SHA256sum: 0ccd0244fed2c71a3bab3776f925a38040eaef47756d94179e6c82933405085c
+Description:  Xray, Penetrates Everything. It helps you to build your own computer network.
+ It secures your network connections and thus protects your privacy.
+

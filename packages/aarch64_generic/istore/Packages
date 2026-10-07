@@ -1,0 +1,45 @@
+Package: luci-app-store
+Version: 0.2.1-r1
+Depends: libc, curl, tar, libuci-lua, mount-utils, luci-lib-taskd
+Section: luci
+Architecture: all
+Installed-Size: 116144
+Filename: luci-app-store_0.2.1-r1_all.ipk
+Size: 117091
+SHA256sum: babf20562f0ad1f4bcf8ae2f61b0ab8e96e925abaffd5dff9413fd0e7ec8cd80
+Description:  luci-app-store is a ipk/apk store developed by LinkEase team
+
+Package: luci-lib-taskd
+Version: 1.0.26
+Depends: libc, luci-lib-xterm, taskd
+Section: luci
+Architecture: all
+Installed-Size: 7054
+Filename: luci-lib-taskd_1.0.26_all.ipk
+Size: 7807
+SHA256sum: ff6598ec8962abd6f10f9fd9b20ad3dc5ffe24279aed906a38c3eef181708048
+Description:  Task library
+
+Package: luci-lib-xterm
+Version: 4.18.0
+Depends: libc
+License: MIT
+Section: luci
+Architecture: all
+Installed-Size: 78528
+Filename: luci-lib-xterm_4.18.0_all.ipk
+Size: 79361
+SHA256sum: f60858fb80a412d7ba724a2677d211340b9c0dc393a8e3069296e6f644808848
+Description:  Xterm.js library
+
+Package: taskd
+Version: 1.0.3-2
+Depends: libc, procd, script-utils, coreutils, coreutils-stty
+Section: utils
+Architecture: all
+Installed-Size: 1627
+Filename: taskd_1.0.3-2_all.ipk
+Size: 2381
+SHA256sum: d38616d9051eb54a2c19e1330189f723547b442d326280c881d68179a600f965
+Description:  Simple Task Manager based on procd
+
