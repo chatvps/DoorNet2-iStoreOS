@@ -5067,21 +5067,35 @@ jobs:
 
           echo "${EXPECTED_PATCH_SHA}  ${PATCH_BIN}" | sha256sum -c -
 
-          FWTOOL="$(
-            find "${GITHUB_WORKSPACE}/staging_dir" \
-              -type f \
-              -path '*/bin/fwtool' \
-              -executable \
-              -print \
-              | head -n 1
-          )"
+          # IMPORTANT: use the host-side fwtool built for the GitHub runner
+          # (x86_64), NOT the target-side AArch64 fwtool that is packaged into
+          # the DoorNet2 rootfs.  The previous generic find picked
+          # staging_dir/target-aarch64_generic_musl/usr/bin/fwtool and failed
+          # with "Exec format error" on the Ubuntu runner.
+          FWTOOL="${GITHUB_WORKSPACE}/staging_dir/host/bin/fwtool"
 
-          [ -n "$FWTOOL" ] || {
-              echo "ERROR: OpenWrt fwtool was not found after the successful build."
+          if [ ! -x "$FWTOOL" ]; then
+              echo "ERROR: host fwtool was not found at the expected OpenWrt host path:"
+              echo "       $FWTOOL"
+              echo "Available fwtool candidates:"
+              find "${GITHUB_WORKSPACE}/staging_dir" -type f -name fwtool -print 2>/dev/null || true
               exit 1
-          }
+          fi
 
-          echo "Using fwtool: $FWTOOL"
+          echo "Using host fwtool: $FWTOOL"
+          file "$FWTOOL" || true
+
+          # Refuse to continue if an ARM/AArch64 target binary somehow appears
+          # at the host path.  This keeps the failure explicit and prevents the
+          # post-build patch from silently selecting the wrong executable again.
+          FWTOOL_FILE_INFO="$(file -b "$FWTOOL" 2>/dev/null || true)"
+          case "$FWTOOL_FILE_INFO" in
+              *ARM*|*aarch64*|*AArch64*)
+                  echo "ERROR: host fwtool path contains a target-architecture binary:"
+                  echo "       $FWTOOL_FILE_INFO"
+                  exit 1
+                  ;;
+          esac
 
           mapfile -t IMAGES < <(
             find ./bin/targets/rockchip/armv8 \
