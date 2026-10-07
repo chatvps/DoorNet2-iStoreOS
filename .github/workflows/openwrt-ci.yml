@@ -226,11 +226,10 @@ jobs:
           set -e
 
           BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-          BUILD_DAY="$(date -u +'%Y.%m.%d')"
-          SHORT_SHA="${GITHUB_SHA:0:7}"
 
-          VERSION="${BUILD_DAY}-r${GITHUB_RUN_NUMBER}-${SHORT_SHA}"
-          TAG="doornet2-${VERSION}"
+          # DoorNet2 project version. Start the new version line from V0.1.
+          VERSION="V0.1"
+          TAG="V0.1"
 
           echo "DOORNET2_VERSION=${VERSION}" >> "$GITHUB_ENV"
           echo "DOORNET2_TAG=${TAG}" >> "$GITHUB_ENV"
@@ -5007,12 +5006,12 @@ jobs:
           grep -q '^CONFIG_PACKAGE_luci-app-passwall_Iptables_Transparent_Proxy=y$' .config
           grep -q '^CONFIG_PACKAGE_luci-app-passwall2_Iptables_Transparent_Proxy=y$' .config
 
-      - name: Lock proven R4 U-Boot before image assembly
+      - name: Lock R4 U-Boot
         shell: bash
         run: |
           set -euo pipefail
 
-          ASSET="${GITHUB_WORKSPACE}/.github/boot-assets/r4-uboot-9d1be44-8m-4m.bin.gz"
+          ASSET="${GITHUB_WORKSPACE}/r4.bin.gz"
           EXPECTED_PATCH_SHA="6cd741e71a65802062ecf134d1dd5f33269c02ccea90a203231a84bdcc7d228a"
           EXPECTED_HEAD32_SHA="1f10125d602a6ac4a77e4fc136c53f94cd4501730c47a0f60c0b651cfd1e7a04"
 
@@ -5051,10 +5050,10 @@ jobs:
 
           PATCHED=0
           for f in "${CANDIDATES[@]}"; do
-              if strings "$f" 2>/dev/null | grep -Eq 'NanoPi R4SE|nanopi-r4se'; then
+              if grep -aEq 'NanoPi R4SE|nanopi-r4se' "$f" 2>/dev/null; then
                   echo "Patching selected R4SE U-Boot output: $f"
                   dd if="$PATCH_BIN" of="$f" bs=1 seek="$PATCH_OFFSET" conv=notrunc status=none
-                  strings "$f" | grep -q 'U-Boot 2024.04-OpenWrt-r0-9d1be44' || {
+                  grep -aFq 'U-Boot 2024.04-OpenWrt-r0-9d1be44' "$f" || {
                       echo "ERROR: patched U-Boot does not expose proven 9d1be44 version."
                       exit 1
                   }
@@ -5617,7 +5616,7 @@ jobs:
 
 
           cat > release-notes.md <<EOF
-          # DoorNet2 OpenWrt ${DOORNET2_VERSION}
+          # DN2 ${DOORNET2_VERSION}
 
           R18 storage layout:
 
@@ -5774,7 +5773,7 @@ jobs:
       - name: Upload firmware
         uses: actions/upload-artifact@v4
         with:
-          name: DoorNet2_firmware
+          name: DN2-V0.1
           path: ./artifact/firmware/
           retention-days: 30
 
@@ -5782,7 +5781,7 @@ jobs:
       - name: Upload release files
         uses: actions/upload-artifact@v4
         with:
-          name: DoorNet2_release
+          name: DN2-V0.1-release
           path: ./artifact/release/
           retention-days: 30
 
@@ -5874,7 +5873,7 @@ jobs:
               gh release edit \
                 "${DOORNET2_TAG}" \
                 --repo "${GITHUB_REPOSITORY}" \
-                --title "DoorNet2 ${DOORNET2_VERSION}" \
+                --title "DN2 ${DOORNET2_VERSION}" \
                 --notes-file \
                 "${GITHUB_WORKSPACE}/artifact/release/release-notes.md"
 
@@ -5888,7 +5887,7 @@ jobs:
                 "${GITHUB_WORKSPACE}/artifact/release/release-notes.md" \
                 --repo "${GITHUB_REPOSITORY}" \
                 --target "${GITHUB_SHA}" \
-                --title "DoorNet2 ${DOORNET2_VERSION}" \
+                --title "DN2 ${DOORNET2_VERSION}" \
                 --notes-file \
                 "${GITHUB_WORKSPACE}/artifact/release/release-notes.md"
 
@@ -5904,7 +5903,7 @@ jobs:
           set -e
 
           echo "========================================"
-          echo "DoorNet2 Final v2.1: user-managed apps + keep-config online upgrade build finished"
+          echo "DN2 ${DOORNET2_VERSION}: build finished"
           echo "========================================"
 
           echo
@@ -6349,5 +6348,5 @@ jobs:
 
           echo
           echo "========================================"
-          echo "DOORNET2 FINAL v3.7 + PROVEN R4 U-BOOT + COHERENT KERNEL + PASSWALL2 + NO-UU SUCCESS"
+          echo "DOORNET2 FINAL v3.8 + PROVEN R4 U-BOOT + COHERENT KERNEL + PASSWALL2 + NO-UU SUCCESS"
           echo "========================================"
