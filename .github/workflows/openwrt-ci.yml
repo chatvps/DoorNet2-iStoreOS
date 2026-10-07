@@ -1,4 +1,4 @@
-name: DN2 Build
+name: DoorNet2-V0.1
 
 on:
   workflow_dispatch:
