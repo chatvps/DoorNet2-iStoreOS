@@ -1,4 +1,4 @@
-name: DoorNet2 iStoreOS Final Build
+name: DN2 Build
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   build_openwrt:
-    name: Build DoorNet2 RK3399 Final Firmware v3.7 Proven R4 U-Boot Lock
+    name: Build Firmware
     # Proven host image used by the bootable R4 DoorNet2 build.
     runs-on: ubuntu-22.04
     timeout-minutes: 360
