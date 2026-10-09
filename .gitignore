@@ -30,3 +30,7 @@ git-src
 .cproject
 .ccache
 .vscode*
+/key-build
+/key-build.pub
+/key-build.ucert
+/artifact/
