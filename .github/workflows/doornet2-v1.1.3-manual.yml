@@ -1,4 +1,4 @@
-name: DoorNet2-V1.1.2
+name: DoorNet2-V1.1.3
 
 on:
   workflow_dispatch:
@@ -6,19 +6,19 @@ on:
       source_ref:
         description: "Branch / tag / commit to build"
         required: true
-        default: "doornet2-v1.1.2"
+        default: "doornet2-v1.1.3"
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: doornet2-v1.1.2-manual
+  group: doornet2-v1.1.3-manual
   cancel-in-progress: false
 
 jobs:
   build:
-    name: DoorNet2-V1.1.2
+    name: DoorNet2-V1.1.3
     runs-on: ubuntu-22.04
     timeout-minutes: 360
 
@@ -70,18 +70,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dl
-          key: doornet2-v1.1.2-dl-${{ runner.os }}-${{ hashFiles('feeds.conf.default', 'feeds.conf.default.custom', 'scripts/local-build/v1.1.2/**') }}
+          key: doornet2-v1.1.3-dl-${{ runner.os }}-${{ hashFiles('feeds.conf.default', 'feeds.conf.default.custom', 'scripts/local-build/v1.1.3/**') }}
           restore-keys: |
-            doornet2-v1.1.2-dl-${{ runner.os }}-
+            doornet2-v1.1.3-dl-${{ runner.os }}-
             doornet2-dl-${{ runner.os }}-
 
       - name: Restore compiler cache
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: doornet2-v1.1.2-ccache-${{ runner.os }}-${{ github.run_id }}
+          key: doornet2-v1.1.3-ccache-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            doornet2-v1.1.2-ccache-${{ runner.os }}-
+            doornet2-v1.1.3-ccache-${{ runner.os }}-
 
       - name: Prepare persistent signing key
         shell: bash
@@ -106,19 +106,19 @@ jobs:
 
           echo "Persistent signing key prepared."
 
-      - name: V1.1.2 precheck
+      - name: V1.1.3 precheck
         shell: bash
         run: |
           set -euxo pipefail
 
-          bash scripts/local-build/v1.1.2/run.sh check
+          bash scripts/local-build/v1.1.3/run.sh check
 
       - name: Verify Go module cache protection
         shell: bash
         run: |
           set -euo pipefail
 
-          file="scripts/local-build/v1.1.2/steps/37-download-packages.sh"
+          file="scripts/local-build/v1.1.3/steps/37-download-packages.sh"
 
           grep -q -- '-maxdepth 1' "$file" || {
             echo "ERROR: step37 does not contain -maxdepth 1"
@@ -144,16 +144,16 @@ jobs:
             --build-arg BUILD_UID="$(id -u)" \
             --build-arg BUILD_GID="$(id -g)" \
             -t doornet2-build:ubuntu22.04 \
-            scripts/local-build/v1.1.2
+            scripts/local-build/v1.1.3
 
-      - name: Build DoorNet2 V1.1.2
+      - name: Build DoorNet2 V1.1.3
         shell: bash
         env:
           DOORNET2_LOG_DIR: ${{ runner.temp }}/doornet2-build-logs
         run: |
           set -o pipefail
 
-          bash scripts/local-build/v1.1.2/run.sh build
+          bash scripts/local-build/v1.1.3/run.sh build
 
       - name: Inspect outputs
         if: always()
@@ -181,21 +181,60 @@ jobs:
           echo "===== ccache ====="
           du -sh .ccache 2>/dev/null || true
 
-      - name: Upload firmware and OPKG artifact
-        if: success()
+      - name: Prepare flat firmware artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          OUT="$GITHUB_WORKSPACE/.doornet2-firmware-artifact"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          FW="$(find "$GITHUB_WORKSPACE" -type f -name 'DoorNet2-ext4-sysupgrade.img.gz' -print -quit)"
+
+          if [ -z "$FW" ]; then
+            echo "ERROR: final DoorNet2 firmware artifact not found"
+            exit 1
+          fi
+
+          RELEASE_DIR="$(dirname "$FW")"
+
+          for f in \
+            DoorNet2-ext4-sysupgrade.img.gz \
+            sha256sums.txt \
+            version.json \
+            release-notes.md
+          do
+            if [ ! -f "$RELEASE_DIR/$f" ]; then
+              echo "ERROR: missing final release file: $f"
+              exit 1
+            fi
+            cp -f "$RELEASE_DIR/$f" "$OUT/$f"
+          done
+
+          echo "===== FINAL USER FIRMWARE ARTIFACT ====="
+          ls -lh "$OUT"
+
+      - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
-          name: DoorNet2-V1.1.2-${{ github.run_number }}
-          path: bin/
+          name: DoorNet2-V1.1.3-firmware-${{ github.run_number }}
+          path: .doornet2-firmware-artifact/*
           if-no-files-found: error
           compression-level: 0
-          retention-days: 14
 
+      - name: Upload OPKG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DoorNet2-V1.1.3-opkg-${{ github.run_number }}
+          path: bin/packages/aarch64_generic/
+          if-no-files-found: error
+          compression-level: 0
       - name: Upload build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: DoorNet2-V1.1.2-logs-${{ github.run_number }}
+          name: DoorNet2-V1.1.3-logs-${{ github.run_number }}
           path: ${{ runner.temp }}/doornet2-build-logs/
           if-no-files-found: warn
           retention-days: 14
