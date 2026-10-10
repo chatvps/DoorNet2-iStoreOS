@@ -457,5 +457,5 @@ ls -lah ./artifact/release/
 
 echo
 echo "========================================"
-echo "DoorNet2-V1.11 build success"
+echo "DoorNet2-V1.1.0 build success"
 echo "========================================"

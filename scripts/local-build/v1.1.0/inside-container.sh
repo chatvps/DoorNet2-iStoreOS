@@ -30,7 +30,7 @@ if [[ -r /run/secrets/doornet2-signing-key ]]; then
     export DOORNET2_SIGNING_KEY="$(cat /run/secrets/doornet2-signing-key)"
 fi
 
-for stage in /workspace/scripts/local-build/v1.11/steps/*.sh; do
+for stage in /workspace/scripts/local-build/v1.1.0/steps/*.sh; do
     case "$(basename "$stage")" in
         56-*) ;; # handled after audits/artifacts but before publishing
     esac

@@ -5,8 +5,8 @@ set -e
 BUILD_DATE="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 
 # DoorNet2 project version. Every firmware/workflow modification increments this version.
-VERSION="DoorNet2-V1.11"
-TAG="DoorNet2-V1.11"
+VERSION="DoorNet2-V1.1.0"
+TAG="DoorNet2-V1.1.0"
 
 echo "DOORNET2_VERSION=${VERSION}" >> "$GITHUB_ENV"
 echo "DOORNET2_TAG=${TAG}" >> "$GITHUB_ENV"

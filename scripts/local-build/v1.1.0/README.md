@@ -1,24 +1,24 @@
-# DoorNet2-V1.11 本地构建脚本（初版/待验证）
+# DoorNet2-V1.1.0 本地构建脚本（初版/待验证）
 
 **来源：** 用户提供的 DoorNet2-V1.7 GitHub Actions YAML，SHA256
 `a9b27a43327cf24be991eddf289103ce1c2f57d2d1fec69e83a2c29c208837cf`。
 
 迁移方式：保留 V1.7 的 3-48、56 步原始脚本逻辑（拆分成可本地运行的脚本），不迁移
 1（云端 Ubuntu 初始化）、2（checkout）、49-53（Actions artifacts）、54-55（自动发布）。
-将 `DoorNet2-V1.7` 修改为 `DoorNet2-V1.11`，编译步骤由 `make -j$(nproc)` 改成
+将 `DoorNet2-V1.7` 修改为 `DoorNet2-V1.1.0`，编译步骤由 `make -j$(nproc)` 改成
 `make -j${DOORNET2_JOBS:-2}`，失败仍回退 `make -j1 V=s`。
 
 使用：
 
 ```bash
 cd ~/Projects/DoorNet2-iStoreOS
-bash scripts/local-build/v1.11/run.sh check
+bash scripts/local-build/v1.1.0/run.sh check
 ```
 
-静态检查后，需要审阅并提交 V1.11 到 GitHub，检查仓库干净，再运行：
+静态检查后，需要审阅并提交 V1.1.0 到 GitHub，检查仓库干净，再运行：
 
 ```bash
-bash scripts/local-build/v1.11/run.sh build
+bash scripts/local-build/v1.1.0/run.sh build
 ```
 
 Docker 运行环境：先前在本机成功构建的 `doornet2-build:ubuntu22.04`，
@@ -43,7 +43,7 @@ mount）。严禁把私钥上传 GitHub。未指定时使用临时 key，**不�
 ```bash
 sudo docker build --build-arg BUILD_UID="$(id -u)" \
   --build-arg BUILD_GID="$(id -g)" \
-  -t doornet2-build:ubuntu22.04 scripts/local-build/v1.11
+  -t doornet2-build:ubuntu22.04 scripts/local-build/v1.1.0
 ```
 
-首轮仅运行 `bash scripts/local-build/v1.11/run.sh check`。
+首轮仅运行 `bash scripts/local-build/v1.1.0/run.sh check`。

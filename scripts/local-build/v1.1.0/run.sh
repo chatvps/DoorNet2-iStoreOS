@@ -42,19 +42,19 @@ assert_sha='66674de2c4ba7aab7ee6df41b1bcc604be0d3b8a274251b97f8a3be06c7086dd'
   exit 1
 }
 
-echo '===== DoorNet2 V1.11 static checks ====='
+echo '===== DoorNet2 V1.1.0 static checks ====='
 
 count=0
 
 for f in \
-  scripts/local-build/v1.11/steps/*.sh \
-  scripts/local-build/v1.11/inside-container.sh
+  scripts/local-build/v1.1.0/steps/*.sh \
+  scripts/local-build/v1.1.0/inside-container.sh
 do
   bash -n "$f"
   count=$((count+1))
 done
 
-bash -n scripts/local-build/v1.11/run.sh
+bash -n scripts/local-build/v1.1.0/run.sh
 
 echo "OK: $count shell scripts checked"
 echo 'OK: R4 compressed SHA256 matches R4 baseline'
@@ -129,7 +129,7 @@ fi
 
 mkdir -p "$logdir"
 
-log="$logdir/DoorNet2-V1.11-$(date +%Y%m%d-%H%M%S).log"
+log="$logdir/DoorNet2-V1.1.0-$(date +%Y%m%d-%H%M%S).log"
 
 echo "Logging build output to: $log"
 
@@ -147,11 +147,11 @@ sudo docker run --rm --init \
   -e GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" \
   -e GITHUB_REF_NAME="${GITHUB_REF_NAME:-$branch}" \
   -e GITHUB_SHA="${GITHUB_SHA:-$(git rev-parse HEAD)}" \
-  -e DOORNET2_VERSION="DoorNet2-V1.11" \
+  -e DOORNET2_VERSION="DoorNet2-V1.1.0" \
   -e DOORNET2_JOBS="${DOORNET2_JOBS:-4}" \
   -e CCACHE_DIR="/workspace/.ccache" \
   -e CCACHE_COMPRESS="1" \
   -w /workspace \
   doornet2-build:ubuntu22.04 \
-  bash scripts/local-build/v1.11/inside-container.sh \
+  bash scripts/local-build/v1.1.0/inside-container.sh \
   2>&1 | tee "$log"

@@ -2,7 +2,7 @@
 # Migrated from V1.7 workflow step 07: Prepare DoorNet2 signing key
 set -euo pipefail
 
-# DoorNet2-V1.11 transitional policy:
+# DoorNet2-V1.1.0 transitional policy:
 # - If DOORNET2_SIGNING_KEY exists, use it as the persistent cross-version key.
 # - If it is not configured yet, do NOT stop the build. Leave key-build absent
 #   and let the OpenWrt/LEDE build system generate its normal per-build key.
