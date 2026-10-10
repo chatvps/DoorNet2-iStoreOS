@@ -1,0 +1,213 @@
+name: DoorNet2 V1.11 Manual Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: "Branch / tag / commit to build"
+        required: true
+        default: "doornet2-v1.11"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: doornet2-v1.11-manual
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build DoorNet2 V1.11
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    env:
+      DOORNET2_JOBS: "4"
+
+    steps:
+      - name: Checkout selected source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+
+      - name: Show source information
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Requested source: ${{ inputs.source_ref }}"
+          echo "Checked out SHA : $(git rev-parse HEAD)"
+          echo "Short SHA       : $(git rev-parse --short HEAD)"
+
+          git log -1 --oneline
+
+          uname -a
+          nproc
+          free -h
+          df -h
+
+          docker --version
+          docker info
+
+      - name: Free runner disk space
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+
+          sudo apt-get clean || true
+          docker system prune -af || true
+
+          df -h
+
+      - name: Restore download cache
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: doornet2-v1.11-dl-${{ runner.os }}-${{ hashFiles('feeds.conf.default', 'feeds.conf.default.custom', 'scripts/local-build/v1.11/**') }}
+          restore-keys: |
+            doornet2-v1.11-dl-${{ runner.os }}-
+            doornet2-dl-${{ runner.os }}-
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: doornet2-v1.11-ccache-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            doornet2-v1.11-ccache-${{ runner.os }}-
+
+      - name: Prepare persistent signing key
+        shell: bash
+        env:
+          DOORNET2_SIGNING_KEY: ${{ secrets.DOORNET2_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${DOORNET2_SIGNING_KEY:-}" ]]; then
+            echo "::warning::DOORNET2_SIGNING_KEY is not configured."
+            echo "::warning::This build is for CI / TF testing only."
+            exit 0
+          fi
+
+          keyfile="$RUNNER_TEMP/doornet2-signing-key"
+
+          umask 077
+          printf '%s' "$DOORNET2_SIGNING_KEY" > "$keyfile"
+          chmod 600 "$keyfile"
+
+          echo "DOORNET2_SIGNING_KEY_FILE=$keyfile" >> "$GITHUB_ENV"
+
+          echo "Persistent signing key prepared."
+
+      - name: V1.11 precheck
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          bash scripts/local-build/v1.11/run.sh check
+
+      - name: Verify Go module cache protection
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          file="scripts/local-build/v1.11/steps/37-download-packages.sh"
+
+          grep -q -- '-maxdepth 1' "$file" || {
+            echo "ERROR: step37 does not contain -maxdepth 1"
+            exit 1
+          }
+
+          if grep -E \
+            'find[[:space:]]+dl[[:space:]]+-size[[:space:]]+-1024c' \
+            "$file"
+          then
+            echo "ERROR: old recursive dl cleanup has returned"
+            exit 1
+          fi
+
+          echo "OK: dl/go-mod-cache protection verified."
+
+      - name: Build Ubuntu 22.04 compilation container
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo docker build \
+            --build-arg BUILD_UID="$(id -u)" \
+            --build-arg BUILD_GID="$(id -g)" \
+            -t doornet2-build:ubuntu22.04 \
+            scripts/local-build/v1.11
+
+      - name: Build DoorNet2 V1.11
+        shell: bash
+        env:
+          DOORNET2_LOG_DIR: ${{ runner.temp }}/doornet2-build-logs
+        run: |
+          set -o pipefail
+
+          bash scripts/local-build/v1.11/run.sh build
+
+      - name: Inspect outputs
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          echo "===== Disk ====="
+          df -h
+
+          echo
+          echo "===== Firmware / OPKG ====="
+
+          if [[ -d bin ]]; then
+            du -sh bin
+            find bin -maxdepth 6 -type f \
+              -printf '%p %s bytes\n' \
+              | sort \
+              | head -400
+          else
+            echo "bin directory does not exist"
+          fi
+
+          echo
+          echo "===== ccache ====="
+          du -sh .ccache 2>/dev/null || true
+
+      - name: Upload firmware and OPKG artifact
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DoorNet2-V1.11-${{ github.run_number }}
+          path: bin/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: DoorNet2-V1.11-logs-${{ github.run_number }}
+          path: ${{ runner.temp }}/doornet2-build-logs/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Destroy signing key
+        if: always()
+        shell: bash
+        run: |
+          set +e
+
+          if [[ -n "${DOORNET2_SIGNING_KEY_FILE:-}" ]] &&
+             [[ -f "$DOORNET2_SIGNING_KEY_FILE" ]]
+          then
+            rm -f "$DOORNET2_SIGNING_KEY_FILE"
+          fi
