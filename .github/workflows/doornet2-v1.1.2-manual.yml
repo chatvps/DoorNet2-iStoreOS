@@ -1,4 +1,4 @@
-name: DoorNet2-V1.1.1
+name: DoorNet2-V1.1.2
 
 on:
   workflow_dispatch:
@@ -6,19 +6,19 @@ on:
       source_ref:
         description: "Branch / tag / commit to build"
         required: true
-        default: "doornet2-v1.1.1"
+        default: "doornet2-v1.1.2"
         type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: doornet2-v1.1.1-manual
+  group: doornet2-v1.1.2-manual
   cancel-in-progress: false
 
 jobs:
   build:
-    name: Build DoorNet2 V1.1.1
+    name: DoorNet2-V1.1.2
     runs-on: ubuntu-22.04
     timeout-minutes: 360
 
@@ -70,18 +70,18 @@ jobs:
         uses: actions/cache@v4
         with:
           path: dl
-          key: doornet2-v1.1.1-dl-${{ runner.os }}-${{ hashFiles('feeds.conf.default', 'feeds.conf.default.custom', 'scripts/local-build/v1.1.1/**') }}
+          key: doornet2-v1.1.2-dl-${{ runner.os }}-${{ hashFiles('feeds.conf.default', 'feeds.conf.default.custom', 'scripts/local-build/v1.1.2/**') }}
           restore-keys: |
-            doornet2-v1.1.1-dl-${{ runner.os }}-
+            doornet2-v1.1.2-dl-${{ runner.os }}-
             doornet2-dl-${{ runner.os }}-
 
       - name: Restore compiler cache
         uses: actions/cache@v4
         with:
           path: .ccache
-          key: doornet2-v1.1.1-ccache-${{ runner.os }}-${{ github.run_id }}
+          key: doornet2-v1.1.2-ccache-${{ runner.os }}-${{ github.run_id }}
           restore-keys: |
-            doornet2-v1.1.1-ccache-${{ runner.os }}-
+            doornet2-v1.1.2-ccache-${{ runner.os }}-
 
       - name: Prepare persistent signing key
         shell: bash
@@ -106,19 +106,19 @@ jobs:
 
           echo "Persistent signing key prepared."
 
-      - name: V1.1.1 precheck
+      - name: V1.1.2 precheck
         shell: bash
         run: |
           set -euxo pipefail
 
-          bash scripts/local-build/v1.1.1/run.sh check
+          bash scripts/local-build/v1.1.2/run.sh check
 
       - name: Verify Go module cache protection
         shell: bash
         run: |
           set -euo pipefail
 
-          file="scripts/local-build/v1.1.1/steps/37-download-packages.sh"
+          file="scripts/local-build/v1.1.2/steps/37-download-packages.sh"
 
           grep -q -- '-maxdepth 1' "$file" || {
             echo "ERROR: step37 does not contain -maxdepth 1"
@@ -144,16 +144,16 @@ jobs:
             --build-arg BUILD_UID="$(id -u)" \
             --build-arg BUILD_GID="$(id -g)" \
             -t doornet2-build:ubuntu22.04 \
-            scripts/local-build/v1.1.1
+            scripts/local-build/v1.1.2
 
-      - name: Build DoorNet2 V1.1.1
+      - name: Build DoorNet2 V1.1.2
         shell: bash
         env:
           DOORNET2_LOG_DIR: ${{ runner.temp }}/doornet2-build-logs
         run: |
           set -o pipefail
 
-          bash scripts/local-build/v1.1.1/run.sh build
+          bash scripts/local-build/v1.1.2/run.sh build
 
       - name: Inspect outputs
         if: always()
@@ -185,7 +185,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: DoorNet2-V1.1.1-${{ github.run_number }}
+          name: DoorNet2-V1.1.2-${{ github.run_number }}
           path: bin/
           if-no-files-found: error
           compression-level: 0
@@ -195,7 +195,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: DoorNet2-V1.1.1-logs-${{ github.run_number }}
+          name: DoorNet2-V1.1.2-logs-${{ github.run_number }}
           path: ${{ runner.temp }}/doornet2-build-logs/
           if-no-files-found: warn
           retention-days: 14
