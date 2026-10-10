@@ -1,4 +1,4 @@
-name: DoorNet2 V1.11 Manual Build
+name: DoorNet2-V1.11
 
 on:
   workflow_dispatch:
